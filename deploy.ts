@@ -19,7 +19,7 @@ new Elysia()
       return new Response('Invalid signature', { status: 401 });
     }
 
-    exec('/mnt/dev/thakur-deploy/deploy.sh', (err, stdout, stderr) => {
+    exec('/opt/platform/deploy-project/deploy.sh', (err, stdout, stderr) => {
       if (err) console.error('Deploy error:', err);
       console.log(stdout);
       console.error(stderr);

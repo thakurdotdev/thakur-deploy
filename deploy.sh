@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-WORKDIR="/mnt/dev/thakur-deploy"
+WORKDIR="/opt/platform/deploy-project"
 cd "$WORKDIR"
 
 git fetch --all
