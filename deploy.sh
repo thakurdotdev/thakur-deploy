@@ -98,4 +98,4 @@ else
   done
 fi
 
-echo "Deploy complete."
+echo "Tada! Deploy complete. 🎉"
