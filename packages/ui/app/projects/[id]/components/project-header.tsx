@@ -10,7 +10,7 @@ interface ProjectHeaderProps {
   project: any;
   activeDeployment: any;
   isDeploying: boolean;
-  onTriggerBuild: () => void;
+  onTriggerBuild: () => Promise<void>;
 }
 
 export function ProjectHeader({
