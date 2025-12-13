@@ -121,6 +121,8 @@ export const ProjectService = {
     const project = await this.getById(id);
     if (!project) return null;
 
+    console.log(`[ProjectService] Deleting project ${id} (${project.name})...`);
+
     // 1. Get all builds for this project to clean up artifacts
     const { builds, deployments, environmentVariables } = await import('../db/schema');
 
@@ -129,45 +131,72 @@ export const ProjectService = {
       .from(builds)
       .where(eq(builds.project_id, id));
     const buildIds = projectBuilds.map((b) => b.id);
+    console.log(`[ProjectService] Found ${buildIds.length} builds to cleanup artifacts for.`);
 
     // 2. Call Deploy Engine to cleanup
+    // WE ALWAYS CALL THIS, even if port is missing, to clean up artifacts/dirs
     const deployEngineUrl = process.env.DEPLOY_ENGINE_URL || 'http://localhost:4002';
     try {
-      if (project.port) {
-        const subdomain =
-          project.domain?.split('.')[0] ||
-          project.name
-            .toLowerCase()
-            .replace(/[^a-z0-9-]/g, '-')
-            .replace(/^-+|-+$/g, '');
+      const subdomain =
+        project.domain?.split('.')[0] ||
+        project.name
+          .toLowerCase()
+          .replace(/[^a-z0-9-]/g, '-')
+          .replace(/^-+|-+$/g, '');
 
-        await fetch(`${deployEngineUrl}/projects/${id}/delete`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            port: project.port,
-            subdomain,
-            buildIds, // Send build IDs for artifact cleanup
-          }),
-        });
+      console.log(`[ProjectService] Requesting Deploy Engine cleanup for ${id}...`);
+      const res = await fetch(`${deployEngineUrl}/projects/${id}/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          port: project.port,
+          subdomain,
+          buildIds, // Send build IDs for artifact cleanup
+        }),
+      });
+
+      if (!res.ok) {
+        console.error(`[ProjectService] Deploy Engine cleanup failed with status: ${res.status}`);
+      } else {
+        console.log(`[ProjectService] Deploy Engine cleanup successful.`);
       }
     } catch (e) {
-      console.error('Failed to cleanup on Deploy Engine', e);
+      console.error('[ProjectService] Failed to cleanup on Deploy Engine', e);
       // Continue with DB deletion even if cleanup fails
     }
 
     // 3. Cascade delete in DB
+    console.log(`[ProjectService] Starting DB transaction...`);
 
     await db.transaction(async (tx) => {
       // Delete env vars
-      await tx.delete(environmentVariables).where(eq(environmentVariables.project_id, id));
+      const delEnv = await tx
+        .delete(environmentVariables)
+        .where(eq(environmentVariables.project_id, id));
+      console.log(`[ProjectService] Deleted environment variables.`); // Drizzle doesn't return count easily with postgres-js helper sometimes, but we trust it runs
+
       // Delete deployments
-      await tx.delete(deployments).where(eq(deployments.project_id, id));
+      const delDep = await tx.delete(deployments).where(eq(deployments.project_id, id));
+      console.log(`[ProjectService] Deleted deployments.`);
+
       // Delete builds
-      await tx.delete(builds).where(eq(builds.project_id, id));
+      const delBuilds = await tx.delete(builds).where(eq(builds.project_id, id));
+      console.log(`[ProjectService] Deleted builds.`);
+
       // Delete project
-      await tx.delete(projects).where(eq(projects.id, id));
+      const delProj = await tx.delete(projects).where(eq(projects.id, id));
+      console.log(`[ProjectService] Deleted project record.`);
     });
+
+    console.log(`[ProjectService] DB transaction complete.`);
+
+    // 4. Verification Check
+    const verifyProject = await this.getById(id);
+    if (verifyProject) {
+      console.error(`[ProjectService] CRITICAL: Project ${id} still exists after deletion!`);
+      throw new Error('Failed to delete project from database');
+    }
+    console.log(`[ProjectService] Verified project ${id} is gone from DB.`);
 
     return project;
   },
