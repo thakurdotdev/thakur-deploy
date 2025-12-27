@@ -1,10 +1,12 @@
+import { AppType } from '../config/framework-config';
+
 export interface BuildJob {
   build_id: string;
   project_id: string;
   github_url: string;
   build_command: string;
   root_directory: string;
-  app_type: 'nextjs' | 'vite';
+  app_type: AppType;
   env_vars: Record<string, string>;
   installation_id?: string;
 }
@@ -34,12 +36,8 @@ export const buildQueue = new Queue('build-queue', {
   connection,
   defaultJobOptions: {
     removeOnComplete: true,
-    removeOnFail: 50,
-    attempts: 3,
-    backoff: {
-      type: 'exponential',
-      delay: 1000,
-    },
+    removeOnFail: true, // Remove failed jobs immediately
+    attempts: 1, // No retries - if it fails, it fails
   },
 });
 
@@ -49,5 +47,14 @@ export const JobQueue = {
     await buildQueue.add('build-job', job, {
       removeOnComplete: true,
     });
+  },
+
+  /**
+   * Clears all jobs from the queue (waiting, active, delayed, failed)
+   */
+  async clearAllJobs() {
+    console.log('Clearing all jobs from build-queue...');
+    await buildQueue.obliterate({ force: true });
+    console.log('All jobs cleared from build-queue');
   },
 };

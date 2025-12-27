@@ -1,9 +1,11 @@
-import { GitService } from './git-service';
-import { LogStreamer } from './log-streamer';
-import { ArtifactService } from './artifact-service';
-import { join } from 'path';
 import { spawn } from 'child_process';
 import { rm } from 'fs/promises';
+import { join } from 'path';
+import { ArtifactService } from './artifact-service';
+import { GitService } from './git-service';
+import { WorkerGitHubService } from './github-service';
+import { LogStreamer, LogLevel } from './log-streamer';
+import { AppType, isBackendFramework } from '../config/framework-config';
 
 interface BuildJob {
   build_id: string;
@@ -11,7 +13,7 @@ interface BuildJob {
   github_url: string;
   build_command: string;
   root_directory: string;
-  app_type: 'nextjs' | 'vite';
+  app_type: AppType;
   env_vars: Record<string, string>;
 }
 
@@ -41,64 +43,116 @@ export const Builder = {
         job.build_id,
         job.project_id,
         `Starting build for ${job.build_id}\n`,
+        'info',
       );
 
       let token: string | undefined;
       // Resolve installation token if installation_id exists
       if ((job as any).installation_id) {
-        // Cast to any because we updated interface in control-api but strict types might miss here unless we update build-worker interface too.
         try {
-          const { GitHubService } = await import('./github-service');
           await LogStreamer.stream(
             job.build_id,
             job.project_id,
             'Authenticating with GitHub App...\n',
+            'info',
           );
-          token = await GitHubService.getInstallationToken((job as any).installation_id);
+          token = await WorkerGitHubService.getInstallationToken((job as any).installation_id);
         } catch (e: any) {
           await LogStreamer.stream(
             job.build_id,
             job.project_id,
             `GitHub Auth Failed: ${e.message}\n`,
+            'error',
           );
           // Proceed? No build will fail if private.
           throw e;
         }
       }
 
-      await LogStreamer.stream(job.build_id, job.project_id, 'Cloning repository...\n');
+      await LogStreamer.stream(job.build_id, job.project_id, 'Cloning repository...\n', 'info');
       await GitService.clone(job.github_url, workDir, token);
 
-      // 2. Install
-      await LogStreamer.stream(job.build_id, job.project_id, 'Installing dependencies...\n');
       const projectDir = join(workDir, job.root_directory);
-      await this.runCommand('bun install', projectDir, job.build_id, job.project_id, job.env_vars);
 
-      // 3. Build
-      await LogStreamer.stream(job.build_id, job.project_id, 'Building project...\n');
-      await this.runCommand(
-        job.build_command,
-        projectDir,
+      // Handle differently based on framework category
+      if (isBackendFramework(job.app_type)) {
+        // Backend apps: Just package source code
+        // Dependencies will be installed at deploy time
+        await LogStreamer.stream(
+          job.build_id,
+          job.project_id,
+          'Backend project detected - skipping build step...\n',
+          'info',
+        );
+        await LogStreamer.stream(
+          job.build_id,
+          job.project_id,
+          'Source code will be packaged and dependencies installed at deploy time.\n',
+          'info',
+        );
+      } else {
+        // Frontend apps: Install dependencies and run build command
+        await LogStreamer.stream(
+          job.build_id,
+          job.project_id,
+          'Installing dependencies...\n',
+          'info',
+        );
+        await this.runCommand(
+          'bun install',
+          projectDir,
+          job.build_id,
+          job.project_id,
+          job.env_vars,
+        );
+
+        await LogStreamer.stream(job.build_id, job.project_id, 'Building project...\n', 'info');
+        await this.runCommand(
+          job.build_command,
+          projectDir,
+          job.build_id,
+          job.project_id,
+          job.env_vars,
+        );
+
+        await LogStreamer.stream(
+          job.build_id,
+          job.project_id,
+          'Build completed successfully!\n',
+          'success',
+        );
+      }
+
+      await LogStreamer.stream(
         job.build_id,
         job.project_id,
-        job.env_vars,
+        'Creating artifact package...\n',
+        'info',
       );
-
-      await LogStreamer.stream(job.build_id, job.project_id, 'Build completed successfully!\n');
-      await LogStreamer.stream(job.build_id, job.project_id, 'Creating artifact package...\n');
       await LogStreamer.stream(
         job.build_id,
         job.project_id,
         'Streaming artifact to Deploy Engine...\n',
+        'info',
       );
 
       await ArtifactService.streamArtifact(job.build_id, projectDir, job.app_type);
 
-      await LogStreamer.stream(job.build_id, job.project_id, 'Artifact uploaded successfully!\n');
+      await LogStreamer.stream(
+        job.build_id,
+        job.project_id,
+        'Artifact uploaded successfully!\n',
+        'success',
+      );
 
       await updateStatus('success');
     } catch (error: any) {
-      await LogStreamer.stream(job.build_id, job.project_id, `Build failed: ${error.message}\n`);
+      await LogStreamer.stream(
+        job.build_id,
+        job.project_id,
+        `Build failed: ${error.message}\n`,
+        'error',
+      );
       await updateStatus('failed');
       throw error;
     } finally {
@@ -119,13 +173,25 @@ export const Builder = {
     projectId: string,
     envVars: Record<string, string> = {},
   ) {
+    // Convert npm/yarn/pnpm commands to bun
+    const bunCommand = this.convertToBunCommand(command);
+    const TIMEOUT_MS = 5 * 60 * 1000; // 5 minute timeout
+
     return new Promise<void>((resolve, reject) => {
-      const [cmd, ...args] = command.split(' ');
+      const [cmd, ...args] = bunCommand.split(' ');
       const child = spawn(cmd, args, {
         cwd,
         shell: true,
         env: { ...process.env, ...envVars },
       });
+
+      // Timeout to prevent indefinite hangs
+      const timeout = setTimeout(() => {
+        console.error(`[Builder] Command timed out after ${TIMEOUT_MS / 1000}s: ${bunCommand}`);
+        LogStreamer.stream(buildId, projectId, `\n❌ Command timed out after 5 minutes\n`, 'error');
+        child.kill('SIGTERM');
+        reject(new Error(`Command timed out after 5 minutes: ${bunCommand}`));
+      }, TIMEOUT_MS);
 
       child.stdout.on('data', (data) => {
         LogStreamer.stream(buildId, projectId, data.toString());
@@ -136,6 +202,7 @@ export const Builder = {
       });
 
       child.on('close', (code) => {
+        clearTimeout(timeout);
         if (code === 0) {
           resolve();
         } else {
@@ -144,8 +211,53 @@ export const Builder = {
       });
 
       child.on('error', (err) => {
+        clearTimeout(timeout);
         reject(err);
       });
     });
+  },
+
+  /**
+   * Converts npm/yarn/pnpm commands to their bun equivalents.
+   * Users can write familiar npm commands, but bun is used for execution.
+   */
+  convertToBunCommand(command: string): string {
+    // Split by && to handle chained commands
+    const parts = command.split('&&').map((part) => part.trim());
+
+    const convertedParts = parts.map((part) => {
+      // npm install -> bun install
+      if (/^npm\s+install\b/.test(part) || /^npm\s+i\b/.test(part)) {
+        return part.replace(/^npm\s+(install|i)\b/, 'bun install');
+      }
+      // npm run <script> -> bun run <script>
+      if (/^npm\s+run\b/.test(part)) {
+        return part.replace(/^npm\s+run\b/, 'bun run');
+      }
+      // npm ci -> bun install
+      if (/^npm\s+ci\b/.test(part)) {
+        return part.replace(/^npm\s+ci\b/, 'bun install');
+      }
+      // yarn install -> bun install
+      if (/^yarn\s+install\b/.test(part) || part === 'yarn') {
+        return part.replace(/^yarn(\s+install)?\b/, 'bun install');
+      }
+      // yarn <script> (not a known yarn command) -> bun run <script>
+      if (/^yarn\s+\w+/.test(part) && !/^yarn\s+(add|remove|install)/.test(part)) {
+        return part.replace(/^yarn\s+/, 'bun run ');
+      }
+      // pnpm install -> bun install
+      if (/^pnpm\s+install\b/.test(part) || /^pnpm\s+i\b/.test(part)) {
+        return part.replace(/^pnpm\s+(install|i)\b/, 'bun install');
+      }
+      // pnpm run <script> -> bun run <script>
+      if (/^pnpm\s+run\b/.test(part)) {
+        return part.replace(/^pnpm\s+run\b/, 'bun run');
+      }
+
+      return part;
+    });
+
+    return convertedParts.join(' && ');
   },
 };

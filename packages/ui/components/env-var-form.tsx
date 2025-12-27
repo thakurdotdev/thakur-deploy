@@ -54,7 +54,18 @@ export function EnvVarForm({
       text.split('\n').forEach((line) => {
         const match = line.match(/^([^=]+)=(.*)$/);
         if (match) {
-          pastedVars.push({ key: match[1].trim(), value: match[2].trim() });
+          const key = match[1].trim();
+          let value = match[2].trim();
+
+          // Strip surrounding quotes if present
+          if (
+            (value.startsWith('"') && value.endsWith('"')) ||
+            (value.startsWith("'") && value.endsWith("'"))
+          ) {
+            value = value.slice(1, -1);
+          }
+
+          pastedVars.push({ key, value });
         }
       });
 

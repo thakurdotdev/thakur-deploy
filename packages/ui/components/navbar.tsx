@@ -17,6 +17,7 @@ import { FolderGit2, LayoutDashboard, LogOut } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
+import { ThemeSwitcher } from './theme-switcher';
 
 export function Navbar() {
   const pathname = usePathname();
@@ -58,7 +59,7 @@ export function Navbar() {
           </div>
         </div>
         <div className="flex items-center gap-4">
-          <ModeToggle />
+          <ThemeSwitcher />
           {session ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

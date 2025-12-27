@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import {
   Table,
   TableBody,
@@ -10,7 +11,7 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { GitBranch, Clock, Terminal, Box } from 'lucide-react';
+import { GitBranch, Clock, Terminal, Box, Loader2 } from 'lucide-react';
 import {
   Sheet,
   SheetContent,
@@ -19,15 +20,27 @@ import {
   SheetTitle,
   SheetTrigger,
 } from '@/components/ui/sheet';
-import { LogViewer } from '@/components/log-viewer';
+import { LogViewer } from '@/components/log-viewer/log-viewer';
 
 interface DeploymentsTabProps {
   builds: any[];
-  onActivateBuild: (buildId: string) => void;
+  onActivateBuild: (buildId: string) => Promise<void> | void;
   activeDeployment?: any;
 }
 
 export function DeploymentsTab({ builds, onActivateBuild, activeDeployment }: DeploymentsTabProps) {
+  const [deployingBuildId, setDeployingBuildId] = useState<string | null>(null);
+
+  const handleDeploy = async (buildId: string) => {
+    if (deployingBuildId) return; // Prevent multiple simultaneous deploys
+    setDeployingBuildId(buildId);
+    try {
+      await onActivateBuild(buildId);
+    } finally {
+      setDeployingBuildId(null);
+    }
+  };
+
   if (!builds || builds.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-muted-foreground border rounded-lg border-dashed">
@@ -93,16 +106,32 @@ export function DeploymentsTab({ builds, onActivateBuild, activeDeployment }: De
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-2">
-                      {build.status === 'success' && !isActive && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-8 text-xs"
-                          onClick={() => onActivateBuild(build.id)}
-                        >
-                          Rollback
-                        </Button>
-                      )}
+                      {build.status === 'success' &&
+                        !isActive &&
+                        (() => {
+                          // Determine if this is a newer or older build than the current deployment
+                          const currentDeploymentBuild = builds.find(
+                            (b) => b.id === activeDeployment?.build_id,
+                          );
+                          const isNewerThanCurrent =
+                            !currentDeploymentBuild ||
+                            new Date(build.created_at) >
+                              new Date(currentDeploymentBuild.created_at);
+                          const isDeploying = deployingBuildId === build.id;
+
+                          return (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-8 text-xs"
+                              disabled={deployingBuildId !== null}
+                              onClick={() => handleDeploy(build.id)}
+                            >
+                              {isDeploying && <Loader2 className="w-3 h-3 mr-1 animate-spin" />}
+                              {isNewerThanCurrent ? 'Deploy' : 'Rollback'}
+                            </Button>
+                          );
+                        })()}
                       <Sheet>
                         <SheetTrigger asChild>
                           <Button variant="ghost" size="icon" className="h-8 w-8">

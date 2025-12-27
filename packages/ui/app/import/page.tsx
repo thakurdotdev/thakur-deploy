@@ -96,6 +96,7 @@ export default function ImportPage() {
         github_branch: selectedRepo.default_branch,
         github_installation_id: selectedInstallation.toString(),
         env_vars: config.envVars,
+        auto_deploy: config.autoDeploy,
       });
 
       // 2. Trigger Build

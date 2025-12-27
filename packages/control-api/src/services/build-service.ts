@@ -2,6 +2,7 @@ import { db } from '../db';
 import { builds, deployments } from '../db/schema';
 import { eq, desc, and } from 'drizzle-orm';
 import { DeploymentService } from './deployment-service';
+import { AppType } from '../config/framework-config';
 
 export const BuildService = {
   async create(data: {
@@ -11,27 +12,49 @@ export const BuildService = {
     const result = await db.insert(builds).values(data).returning();
     const build = result[0];
 
-    // Enqueue build job
     if (data.status === 'pending') {
       const { ProjectService } = await import('./project-service');
       const { EnvService } = await import('./env-service');
-      const { JobQueue } = await import('../queue');
+      // const { JobQueue } = await import('../queue'); // Commented: using direct HTTP instead
 
       const project = await ProjectService.getById(data.project_id);
       if (project) {
         const envVarsList = await EnvService.getAll(project.id);
         const envVars = envVarsList.reduce((acc, curr) => ({ ...acc, [curr.key]: curr.value }), {});
 
-        await JobQueue.enqueue({
+        const buildJob = {
           build_id: build.id,
           project_id: project.id,
           github_url: project.github_url,
           build_command: project.build_command,
           root_directory: project.root_directory || './',
-          app_type: project.app_type as 'nextjs' | 'vite',
+          app_type: project.app_type as AppType,
           env_vars: envVars,
           installation_id: project.github_installation_id || undefined,
-        });
+        };
+
+        // Direct HTTP call to build-worker instead of queue
+        const buildWorkerUrl = process.env.BUILD_WORKER_URL || 'http://localhost:4001';
+        console.log(`[BuildService] Triggering build via HTTP: ${buildJob.build_id}`);
+
+        try {
+          const res = await fetch(`${buildWorkerUrl}/build`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(buildJob),
+          });
+          if (!res.ok) {
+            console.error(`[BuildService] Failed to trigger build: ${res.statusText}`);
+          } else {
+            console.log(`[BuildService] Build triggered successfully`);
+          }
+        } catch (err) {
+          console.error(`[BuildService] Error triggering build:`, err);
+        }
+
+        /* Queue-based approach (commented)
+        await JobQueue.enqueue(buildJob);
+        */
       }
     }
 
@@ -88,10 +111,6 @@ export const BuildService = {
           `[BuildService] No active deployments for project ${updated.project_id}. Auto-activating build ${id}.`,
         );
         try {
-          // Import DeploymentService dynamically to avoid circular dependency if possible,
-          // or ensure DeploymentService imports BuildService only for types or not at all.
-          // Checking DeploymentService... it imports db and schema. It does NOT import BuildService.
-          // So safe to import here.
           await DeploymentService.activateBuild(updated.project_id, id);
         } catch (e) {
           console.error(`[BuildService] Auto-activation failed:`, e);

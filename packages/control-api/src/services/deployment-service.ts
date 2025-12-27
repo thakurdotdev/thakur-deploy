@@ -1,6 +1,7 @@
+import { and, eq } from 'drizzle-orm';
 import { db } from '../db';
-import { deployments, projects, builds } from '../db/schema';
-import { eq, and } from 'drizzle-orm';
+import { deployments, projects } from '../db/schema';
+import { EnvService } from './env-service';
 
 export const DeploymentService = {
   async activateBuild(projectId: string, buildId: string) {
@@ -12,9 +13,13 @@ export const DeploymentService = {
     // Ensure we don't proceed if port is missing
     if (!project.port) throw new Error('Project has no assigned port');
 
+    // Fetch and decrypt environment variables for this project
+    const envVarsObject = await EnvService.getAsRecord(projectId);
+
     console.log(
       `[DeploymentService] STARTING activation for ${project.name} (Build: ${buildId}) on Port: ${project.port}`,
     );
+    console.log(`[DeploymentService] Passing ${Object.keys(envVarsObject).length} env vars`);
 
     // Call Deploy Engine
     const deployEngineUrl = process.env.DEPLOY_ENGINE_URL || 'http://localhost:4002';
@@ -34,6 +39,7 @@ export const DeploymentService = {
             .toLowerCase()
             .replace(/[^a-z0-9-]/g, '-')
             .replace(/^-+|-+$/g, ''), // Slugify
+        envVars: envVarsObject, // Pass env vars to deploy engine
       }),
     });
 
@@ -86,7 +92,11 @@ export const DeploymentService = {
     const res = await fetch(`${deployEngineUrl}/stop`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ port: project.port, projectId }),
+      body: JSON.stringify({
+        port: project.port,
+        projectId,
+        buildId: activeDeployment.build_id,
+      }),
     });
 
     if (!res.ok) {

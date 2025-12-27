@@ -16,21 +16,7 @@ export const githubWebhook = new Elysia().post(
       return 'Missing signature';
     }
 
-    // Verify signature
-    // Need raw body for verification. Elysia body is parsed JSON.
-    // We can use request.text() but we already consumed body probably?
-    // Elysia consumes body. We need to handle this.
-    // A trick is to use 'text' parser or access text via cloned request if not consumed.
-    // However, Elysia with implicit body parsing might make this tricky.
-    // Let's assume for now we can serialize body back to string, but that's risky for signature.
-    // Correct way in Elysia: Use `type: 'text'` or handle raw reading?
-    // Wait, if I define body schema t.Object, it parses.
-    // I will try to read text first, then parse.
-    // But this route handler signature implies automatic parsing if I access 'body'.
-
-    // Actually, I can use a global hook or local hook to get raw body?
-    // Let's rely on JSON.stringify(body) being close enough IF format is consistent, but it's not robust.
-    // Better: Retrieve raw text first.
+    // 1. Verify Signature
 
     const rawBody = await request.text();
     const verified = GitHubService.verifyWebhookSignature(rawBody, signature);
@@ -70,10 +56,7 @@ export const githubWebhook = new Elysia().post(
           await db
             .delete(githubInstallations)
             .where(eq(githubInstallations.github_installation_id, installation.id.toString()));
-          // Also nullify projects? Or let them stay but they will fail builds?
-          // Foreign key might cascade or restrict.
-          // In schema I didn't set cascade.
-          // Depending on logic, I might need to disconnect projects.
+          // Disconnect projects associated with this installation
           await db
             .update(projects)
             .set({ github_installation_id: null })
@@ -94,9 +77,7 @@ export const githubWebhook = new Elysia().post(
         }
 
         // Find projects connected to this repository AND matches branch (if we enforce branch?)
-        // Currently schema has `github_branch`.
-
-        // Find by Repo ID (most robust) or Full Name
+        // Find projects connected to this repository AND matches branch
         const repoId = repo.id.toString();
 
         const connectedProjects = await db
@@ -114,21 +95,18 @@ export const githubWebhook = new Elysia().post(
         console.log(`[GitHub Webhook] triggering builds for ${connectedProjects.length} projects`);
 
         for (const project of connectedProjects) {
+          if (!project.auto_deploy) {
+            console.log(
+              `[GitHub Webhook] Skipping auto-deploy for project ${project.name} (disabled)`,
+            );
+            continue;
+          }
+
           await BuildService.create({
             project_id: project.id,
             status: 'pending',
           });
-          // BuildService.create just inserts DB row.
-          // We need to actually trigger the worker or the worker polls?
-          // Existing logic: BuildService.create returns a build.
-          // How does build-worker know?
-          // Usually we publish to Redis queue.
-          // I need to check `src/services/build-service.ts` or `queue/` to see how builds are dispatched.
-
-          // Checking existing `deploy-service` or `build-service`...
-          // In the previous context, there was a `BuildQueue` mentioned.
-          // I should verify if `BuildService.create` enqueues the job.
-          // If not, I need to look at how user triggers it.
+          console.log(`[GitHub Webhook] Build created for project ${project.id}`);
         }
       }
     } catch (e) {

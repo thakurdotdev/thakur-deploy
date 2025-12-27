@@ -1,6 +1,7 @@
 import { db } from '../db';
 import { projects } from '../db/schema';
 import { eq, sql } from 'drizzle-orm';
+import { AppType } from '../config/framework-config';
 
 export const ProjectService = {
   async getAll() {
@@ -17,13 +18,14 @@ export const ProjectService = {
     github_url: string;
     root_directory?: string;
     build_command: string;
-    app_type: 'nextjs' | 'vite';
+    app_type: AppType;
     domain?: string;
     env_vars?: Record<string, string>;
     github_repo_id?: string;
     github_repo_full_name?: string;
     github_branch?: string;
     github_installation_id?: string;
+    auto_deploy?: boolean;
   }) {
     // Determine next available port
     const resultMax = await db
@@ -34,7 +36,6 @@ export const ProjectService = {
     // Start checking from the highest assigned port + 1, or base port
     let nextPort = (resultMax[0]?.maxPort || basePort - 1) + 1;
 
-    // Check availability loop
     // Check availability loop
     const deployEngineUrl = process.env.DEPLOY_ENGINE_URL || 'http://localhost:4002';
 
@@ -73,34 +74,47 @@ export const ProjectService = {
       domain = `${slug}.${baseDomain}`;
     }
 
-    const result = await db
-      .insert(projects)
-      .values({
-        name: data.name,
-        github_url: data.github_url,
-        build_command: data.build_command,
-        app_type: data.app_type,
-        root_directory: data.root_directory,
-        domain: domain,
-        port: nextPort,
-        github_repo_id: data.github_repo_id,
-        github_repo_full_name: data.github_repo_full_name,
-        github_branch: data.github_branch || 'main',
-        github_installation_id: data.github_installation_id,
-      })
-      .returning();
+    // Transactional Creation
+    return await db.transaction(async (tx) => {
+      const result = await tx
+        .insert(projects)
+        .values({
+          name: data.name,
+          github_url: data.github_url,
+          build_command: data.build_command,
+          app_type: data.app_type,
+          root_directory: data.root_directory,
+          domain: domain,
+          port: nextPort,
+          github_repo_id: data.github_repo_id,
+          github_repo_full_name: data.github_repo_full_name,
+          github_branch: data.github_branch || 'main',
+          github_installation_id: data.github_installation_id,
+          auto_deploy: data.auto_deploy ?? true, // Default true
+        })
+        .returning();
 
-    const projectId = result[0].id;
+      const projectId = result[0].id;
 
-    // Save env vars if provided
-    if (data.env_vars) {
-      const { EnvService } = await import('./env-service');
-      for (const [key, value] of Object.entries(data.env_vars)) {
-        await EnvService.create(projectId, key, value);
+      // Save env vars if provided
+      if (data.env_vars) {
+        const { EnvService } = await import('./env-service');
+        const { environmentVariables } = await import('../db/schema');
+
+        for (const [key, value] of Object.entries(data.env_vars)) {
+          // Encrypt using EnvService helper
+          const encryptedValue = EnvService.encrypt(value);
+
+          await tx.insert(environmentVariables).values({
+            project_id: projectId,
+            key,
+            value: encryptedValue,
+          });
+        }
       }
-    }
 
-    return result[0];
+      return result[0];
+    });
   },
 
   async update(id: string, data: Partial<typeof projects.$inferInsert>) {
@@ -166,29 +180,30 @@ export const ProjectService = {
     }
 
     // 3. Cascade delete in DB
-    console.log(`[ProjectService] Starting DB transaction...`);
+    console.log(`[ProjectService] Starting DB deletion...`);
 
-    await db.transaction(async (tx) => {
-      // Delete env vars
-      const delEnv = await tx
-        .delete(environmentVariables)
-        .where(eq(environmentVariables.project_id, id));
-      console.log(`[ProjectService] Deleted environment variables.`); // Drizzle doesn't return count easily with postgres-js helper sometimes, but we trust it runs
+    // Delete env vars
+    await db.delete(environmentVariables).where(eq(environmentVariables.project_id, id));
+    console.log(`[ProjectService] Deleted environment variables.`);
 
-      // Delete deployments
-      const delDep = await tx.delete(deployments).where(eq(deployments.project_id, id));
-      console.log(`[ProjectService] Deleted deployments.`);
+    // Delete deployments
+    await db.delete(deployments).where(eq(deployments.project_id, id));
+    console.log(`[ProjectService] Deleted deployments.`);
 
-      // Delete builds
-      const delBuilds = await tx.delete(builds).where(eq(builds.project_id, id));
-      console.log(`[ProjectService] Deleted builds.`);
+    // Delete builds
+    await db.delete(builds).where(eq(builds.project_id, id));
+    console.log(`[ProjectService] Deleted builds.`);
 
-      // Delete project
-      const delProj = await tx.delete(projects).where(eq(projects.id, id));
-      console.log(`[ProjectService] Deleted project record.`);
-    });
+    // Delete project - use returning to verify it was deleted
+    const deletedProject = await db.delete(projects).where(eq(projects.id, id)).returning();
+    console.log(`[ProjectService] Deleted ${deletedProject.length} project record(s).`);
 
-    console.log(`[ProjectService] DB transaction complete.`);
+    if (deletedProject.length === 0) {
+      console.error(`[ProjectService] Project ${id} was not deleted - delete returned 0 rows`);
+      throw new Error('Failed to delete project from database');
+    }
+
+    console.log(`[ProjectService] DB deletion complete.`);
 
     // 4. Verification Check
     const verifyProject = await this.getById(id);

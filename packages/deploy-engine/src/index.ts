@@ -22,10 +22,17 @@ const app = new Elysia()
   .post(
     '/activate',
     async ({ body }: { body: any }) => {
-      const { projectId, buildId, port, appType, subdomain } = body;
+      const { projectId, buildId, port, appType, subdomain, envVars } = body;
 
       try {
-        await DeployService.activateDeployment(projectId, buildId, port, appType, subdomain);
+        await DeployService.activateDeployment(
+          projectId,
+          buildId,
+          port,
+          appType,
+          subdomain,
+          envVars || {},
+        );
         return { success: true };
       } catch (e: any) {
         return new Response(e.message, { status: 500 });
@@ -36,17 +43,24 @@ const app = new Elysia()
         projectId: t.String(),
         buildId: t.String(),
         port: t.Number(),
-        appType: t.Union([t.Literal('nextjs'), t.Literal('vite')]),
+        appType: t.Union([
+          t.Literal('nextjs'),
+          t.Literal('vite'),
+          t.Literal('express'),
+          t.Literal('hono'),
+          t.Literal('elysia'),
+        ]),
         subdomain: t.String(),
+        envVars: t.Optional(t.Record(t.String(), t.String())),
       }),
     },
   )
   .post(
     '/stop',
     async ({ body }: { body: any }) => {
-      const { port } = body;
+      const { port, projectId, buildId } = body;
       try {
-        await DeployService.stopDeployment(port);
+        await DeployService.stopDeployment(port, projectId, buildId);
         return { success: true };
       } catch (e: any) {
         return new Response(e.message, { status: 500 });
@@ -55,6 +69,8 @@ const app = new Elysia()
     {
       body: t.Object({
         port: t.Number(),
+        projectId: t.Optional(t.String()),
+        buildId: t.Optional(t.String()),
       }),
     },
   )
@@ -71,8 +87,8 @@ const app = new Elysia()
       return new Response(e.message, { status: 500 });
     }
   })
-  .get('/*', ({ request }) => {
-    return DeployService.serveRequest(request);
+  .get('/*', () => {
+    return DeployService.serveRequest();
   })
   .listen(4002);
 

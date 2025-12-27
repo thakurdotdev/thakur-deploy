@@ -1,27 +1,81 @@
 import jwt from 'jsonwebtoken';
+import { readFileSync, existsSync } from 'fs';
+import { join, resolve } from 'path';
+
+// Debug: Log environment at module load time
+console.log(
+  '[github-service] Module loaded. GITHUB_APP_ID:',
+  process.env.GITHUB_APP_ID ? 'SET' : 'NOT SET',
+);
 
 interface GitHubInstallationToken {
   token: string;
   expires_at: string;
 }
 
-export const GitHubService = {
+/**
+ * Resolves the path to the GitHub App private key file.
+ * Priority: GITHUB_APP_PRIVATE_KEY_PATH env var > default project root location
+ */
+function getPrivateKeyPath(): string {
+  if (process.env.GITHUB_APP_PRIVATE_KEY_PATH) {
+    return resolve(process.env.GITHUB_APP_PRIVATE_KEY_PATH);
+  }
+  // Default: project root (4 levels up from services dir)
+  return join(__dirname, '..', '..', '..', '..', 'github-app.pem');
+}
+
+/**
+ * Reads and validates the GitHub App private key.
+ * Throws descriptive errors for common issues.
+ */
+function loadPrivateKey(): string {
+  const keyPath = getPrivateKeyPath();
+
+  if (!existsSync(keyPath)) {
+    throw new Error(
+      `GitHub App private key not found at: ${keyPath}\n` +
+        `Please ensure the PEM file exists or set GITHUB_APP_PRIVATE_KEY_PATH env variable.`,
+    );
+  }
+
+  try {
+    const key = readFileSync(keyPath, 'utf-8').trim();
+
+    // Validate PEM format (supports both PKCS#1 and PKCS#8)
+    if (!key.includes('-----BEGIN') || !key.includes('PRIVATE KEY-----')) {
+      throw new Error(
+        `Invalid PEM format in: ${keyPath}\n` + `Expected file to contain a valid RSA private key.`,
+      );
+    }
+
+    return key;
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('Invalid PEM')) {
+      throw error;
+    }
+    throw new Error(
+      `Failed to read GitHub App private key from: ${keyPath}\n` +
+        `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+    );
+  }
+}
+
+export const WorkerGitHubService = {
+  /**
+   * Generates a JWT for authenticating as the GitHub App.
+   * @throws Error if GITHUB_APP_ID is missing or private key is invalid
+   */
   generateAppJWT(): string {
     const appId = process.env.GITHUB_APP_ID;
-    const privateKey = process.env.GITHUB_APP_PRIVATE_KEY;
 
-    if (!appId || !privateKey) {
-      throw new Error('Missing GITHUB_APP_ID or GITHUB_APP_PRIVATE_KEY');
+    if (!appId) {
+      throw new Error(
+        'Missing GITHUB_APP_ID environment variable.\n' + 'Please set this in your .env file.',
+      );
     }
 
-    let key = privateKey;
-    if (!key.includes('-----BEGIN RSA PRIVATE KEY-----')) {
-      try {
-        key = Buffer.from(privateKey, 'base64').toString('utf-8');
-      } catch (e) {
-        // keep as is
-      }
-    }
+    const privateKey = loadPrivateKey();
 
     const payload = {
       iat: Math.floor(Date.now() / 1000) - 60,
@@ -29,10 +83,26 @@ export const GitHubService = {
       iss: appId,
     };
 
-    return jwt.sign(payload, key, { algorithm: 'RS256' });
+    try {
+      return jwt.sign(payload, privateKey, { algorithm: 'RS256' });
+    } catch (error) {
+      throw new Error(
+        `Failed to sign JWT with GitHub App private key.\n` +
+          `This usually means the private key format is incorrect.\n` +
+          `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      );
+    }
   },
 
+  /**
+   * Retrieves an installation access token for a specific installation.
+   * @throws Error if JWT generation fails or GitHub API returns an error
+   */
   async getInstallationToken(installationId: string): Promise<string> {
+    if (!installationId) {
+      throw new Error('Installation ID is required');
+    }
+
     const appJwt = this.generateAppJWT();
 
     const res = await fetch(
@@ -47,9 +117,22 @@ export const GitHubService = {
     );
 
     if (!res.ok) {
-      const err = await res.text();
-      console.error('Failed to get installation token', err);
-      throw new Error(`Failed to get installation token: ${res.statusText}`);
+      const errorBody = await res.text();
+      let errorMessage = `GitHub API error (${res.status}): ${res.statusText}`;
+
+      try {
+        const errorJson = JSON.parse(errorBody);
+        if (errorJson.message) {
+          errorMessage = `GitHub API error: ${errorJson.message}`;
+        }
+      } catch {
+        // Use raw error body if not JSON
+        if (errorBody) {
+          errorMessage = `GitHub API error: ${errorBody}`;
+        }
+      }
+
+      throw new Error(errorMessage);
     }
 
     const data = (await res.json()) as GitHubInstallationToken;

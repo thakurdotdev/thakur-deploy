@@ -5,16 +5,19 @@ import { JobQueue } from '../queue';
 import { LogService } from '../services/log-service';
 import { WebSocketService } from '../ws';
 import { db } from '../db';
-import { deployments } from '../db/schema';
+import { deployments, LogLevel } from '../db/schema';
 import { eq, and } from 'drizzle-orm';
 import { DeploymentService } from '../services/deployment-service';
 
 export const buildsRoutes = new Elysia()
   .group('/projects/:id/builds', (app) =>
     app
-      .post('/', async ({ params: { id } }) => {
+      .post('/', async ({ params: { id }, set }) => {
         const project = await ProjectService.getById(id);
-        if (!project) throw new Error('Project not found');
+        if (!project) {
+          set.status = 404;
+          return { error: 'Project not found' };
+        }
 
         const build = await BuildService.create({
           project_id: id,
@@ -29,51 +32,46 @@ export const buildsRoutes = new Elysia()
   )
   .group('/builds', (app) =>
     app
-      .get('/:id', async ({ params: { id } }) => {
+      .get('/:id', async ({ params: { id }, set }) => {
         const build = await BuildService.getById(id);
-        if (!build) throw new Error('Build not found');
+        if (!build) {
+          set.status = 404;
+          return { error: 'Build not found' };
+        }
         return build;
       })
       .get('/:id/logs', async ({ params: { id } }) => {
         return await LogService.getLogs(id);
       })
-      .post('/:id/logs', async ({ params: { id }, body }) => {
-        const { logs } = body as { logs: string };
-        await LogService.persist(id, logs);
-        WebSocketService.broadcast(id, logs);
-        return { success: true };
-      })
-      .put('/:id', async ({ params: { id }, body }) => {
-        const { status } = body as { status: string };
-        const updated = await BuildService.updateStatus(id, status as any);
-
-        if (updated) {
-          WebSocketService.broadcastBuildUpdate(updated.project_id, updated);
-
-          // Auto-Deploy logic: If build succeeded and no active deployment exists, activate it.
-          if (status === 'success') {
-            const activeDeployment = await db.query.deployments.findFirst({
-              where: and(
-                eq(deployments.project_id, updated.project_id),
-                eq(deployments.status, 'active'),
-              ),
-            });
-
-            if (!activeDeployment) {
-              console.log(
-                `[AutoDeploy] No active deployment for project ${updated.project_id}. Auto-activating build ${updated.id}...`,
-              );
-              try {
-                await DeploymentService.activateBuild(updated.project_id, updated.id);
-                // Notify again about the deployment change via socket?
-                // DeploymentService updates DB, but maybe we should emit a project update event if we had one.
-                // For now, the frontend refreshing on build success or polling will catch it.
-              } catch (e) {
-                console.error(`[AutoDeploy] Failed to auto-activate build ${updated.id}:`, e);
-              }
-            }
-          }
-        }
-        return updated;
+      .delete('/:id/logs', async ({ params: { id } }) => {
+        await LogService.clearLogs(id);
+        return { success: true, message: 'Logs cleared' };
       }),
   );
+
+export const internalBuildRoutes = new Elysia().group('/builds', (app) =>
+  app
+    .post('/:id/logs', async ({ params: { id }, body }) => {
+      const { logs, level } = body as { logs: string; level?: LogLevel };
+      await LogService.persist(id, logs, level || 'info');
+      WebSocketService.broadcast(id, logs, level || 'info');
+      return { success: true };
+    })
+    .put('/:id', async ({ params: { id }, body }) => {
+      const { status } = body as { status: string };
+      const updated = await BuildService.updateStatus(id, status as any);
+
+      if (updated) {
+        WebSocketService.broadcastBuildUpdate(updated.project_id, updated);
+
+        // Auto-Deploy logic is now handled in BuildService.updateStatus()
+        // Removed duplicate activation here to prevent double deployments
+      }
+      return updated;
+    })
+    // Admin endpoint to clear all jobs from queue
+    .delete('/queue', async () => {
+      await JobQueue.clearAllJobs();
+      return { success: true, message: 'All jobs cleared from queue' };
+    }),
+);

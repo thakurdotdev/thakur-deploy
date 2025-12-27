@@ -1,8 +1,15 @@
 import { existsSync, mkdirSync } from 'fs';
 import { rm, unlink } from 'fs/promises';
 import { join } from 'path';
+import {
+  AppType,
+  FRAMEWORKS,
+  getBackendStartCommand,
+  isBackendFramework,
+  shouldUseStaticServer,
+} from '../config/framework-config';
+import { LogService } from './log-service';
 import { NginxService } from './nginx-service';
-import { pid } from 'process';
 
 const BASE_DIR = process.env.BASE_DIR || join(process.cwd(), 'apps');
 const ARTIFACTS_DIR = join(BASE_DIR, 'artifacts');
@@ -57,8 +64,9 @@ export const DeployService = {
     projectId: string,
     buildId: string,
     port: number,
-    appType: 'nextjs' | 'vite',
+    appType: AppType,
     subdomain: string,
+    envVars: Record<string, string> = {},
   ) {
     const paths = this.getPaths(projectId, buildId);
 
@@ -66,37 +74,55 @@ export const DeployService = {
       throw new Error(`Artifact not found: ${paths.artifact}`);
     }
 
+    await LogService.stream(buildId, 'Starting deployment...');
+
     mkdirSync(paths.extractDir, { recursive: true });
 
+    await LogService.stream(buildId, 'Extracting artifact...');
     await retry(() => this.extractArtifact(paths.artifact, paths.extractDir), {
       name: 'artifact extraction',
       timeoutMs: 8000,
     });
 
+    // internal log only - don't expose symlink details to user
     await retry(() => this.updateSymlink(paths.projectDir, paths.extractDir, buildId), {
       name: 'symlink update',
     });
 
     await this.killProjectProcess(projectId, port);
 
-    await this.startApplication(paths.extractDir, port, appType, paths.projectDir);
+    await LogService.stream(buildId, `Starting ${appType} application...`);
+    await this.startApplication(
+      paths.extractDir,
+      port,
+      appType,
+      paths.projectDir,
+      buildId,
+      envVars,
+    );
 
     if (IS_PLATFORM_PROD) {
+      await LogService.stream(buildId, `Configuring domain...`);
       await retry(() => NginxService.createConfig(subdomain, port), {
         name: `nginx config ${subdomain}`,
         timeoutMs: 6000,
       });
     }
 
+    await LogService.stream(buildId, '✅ Deployment successful!');
     return { success: true };
   },
 
-  async stopDeployment(port: number, projectId?: string) {
+  async stopDeployment(port: number, projectId?: string, buildId?: string) {
+    if (buildId) await LogService.stream(buildId, 'Stopping deployment...');
+
     if (projectId) {
       await this.killProjectProcess(projectId, port);
     } else {
       await this.ensurePortFree(port);
     }
+
+    if (buildId) await LogService.stream(buildId, '✅ Deployment stopped successfully!');
     return { success: true };
   },
 
@@ -157,14 +183,29 @@ export const DeployService = {
     const pidFile = join(BASE_DIR, projectId, 'server.pid');
 
     if (existsSync(pidFile)) {
+      let pid: number | undefined;
       try {
-        const pid = parseInt(await Bun.file(pidFile).text(), 10);
-        process.kill(pid, 'SIGTERM');
-        await new Promise((r) => setTimeout(r, 300));
-        process.kill(pid, 0);
-        process.kill(pid, 'SIGKILL');
+        pid = parseInt(await Bun.file(pidFile).text(), 10);
+        if (!isNaN(pid)) {
+          // Try graceful shutdown first
+          try {
+            process.kill(pid, 'SIGTERM');
+            await new Promise((r) => setTimeout(r, 300));
+          } catch {
+            // Process might already be dead, that's fine
+          }
+
+          // Check if still running, if so force kill
+          try {
+            process.kill(pid, 0); // Test if process exists
+            process.kill(pid, 'SIGKILL');
+          } catch {
+            // Process already dead, that's fine
+          }
+        }
       } catch (e) {
-        console.log('Failed to kill process', pid, e);
+        // Failed to read pid file or parse, just continue
+        console.log(`[DeployService] Could not read/parse pid file, continuing...`);
       }
       await unlink(pidFile).catch(() => {});
     }
@@ -190,61 +231,133 @@ export const DeployService = {
   async startApplication(
     cwd: string,
     port: number,
-    appType: 'nextjs' | 'vite',
+    appType: AppType,
     projectDir: string,
+    buildId?: string,
+    envVars: Record<string, string> = {},
   ) {
+    const framework = FRAMEWORKS[appType];
+    const useStaticServer = shouldUseStaticServer(appType, cwd);
+
     let startCmd: string[];
-    let isStatic = false;
+    let workingDir: string;
 
-    // Detect static Next.js export
-    const staticNextPath = join(cwd, 'out');
-    const isStaticNext = appType === 'nextjs' && existsSync(staticNextPath);
-
-    if (appType === 'vite' || isStaticNext) {
-      isStatic = true;
-
+    if (useStaticServer) {
+      if (buildId) await LogService.stream(buildId, 'Using static file server...');
       const serverScript = join(process.cwd(), 'src', 'static-server.ts');
-      const distDir = join(cwd, isStaticNext ? 'out' : 'dist');
-
+      const distDir = join(cwd, appType === 'nextjs' ? 'out' : 'dist');
       startCmd = ['bun', 'run', serverScript, distDir, port.toString()];
+      workingDir = process.cwd();
     } else {
-      // SSR Next.js
-      const nodeModulesPath = join(cwd, 'node_modules');
-
-      if (!existsSync(nodeModulesPath)) {
-        const installProc = Bun.spawn(['bun', 'install', '--production'], {
-          cwd,
-          stdout: 'inherit',
-          stderr: 'inherit',
-        });
-        await installProc.exited;
-        if (installProc.exitCode !== 0) {
-          throw new Error('Dependency install failed');
-        }
+      if (framework.requiresInstall) {
+        if (buildId) await LogService.stream(buildId, 'Installing dependencies...');
+        await this.ensureDependenciesInstalled(cwd);
+        if (buildId) await LogService.stream(buildId, 'Dependencies installed!');
       }
-
-      startCmd = ['bun', 'run', 'start', '--', '--port', port.toString()];
+      startCmd = isBackendFramework(appType)
+        ? getBackendStartCommand(cwd)
+        : framework.startCommand(port, cwd);
+      workingDir = cwd;
     }
 
+    console.log(`[DeployService] Starting app with command: ${startCmd.join(' ')}`);
+    console.log(`[DeployService] Working directory: ${workingDir}`);
+    console.log(`[DeployService] PORT env var will be set to: ${port}`);
+    console.log(
+      `[DeployService] Passing ${Object.keys(envVars).length} project env vars:`,
+      Object.keys(envVars),
+    );
+    if (buildId) await LogService.stream(buildId, `Starting application server...`);
+
     const appProc = Bun.spawn(startCmd, {
-      cwd: appType === 'nextjs' && !isStatic ? cwd : process.cwd(),
-      stdout: 'inherit',
-      stderr: 'inherit',
+      cwd: workingDir,
+      stdout: 'pipe',
+      stderr: 'pipe',
       detached: true,
       env: {
         ...process.env,
+        ...envVars, // Inject project-specific env vars
         NODE_ENV: 'production',
         PLATFORM_ENV: 'production',
         PORT: port.toString(),
       },
     });
 
+    // Log app output for debugging
+    const logAppOutput = async (stream: ReadableStream<Uint8Array> | null, label: string) => {
+      if (!stream) return;
+      const reader = stream.getReader();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const text = new TextDecoder().decode(value);
+          console.log(`[App ${label}]`, text);
+          if (buildId) await LogService.stream(buildId, text);
+        }
+      } catch {
+        // Stream closed, that's fine
+      }
+    };
+
+    // Start logging app output in background (don't await)
+    logAppOutput(appProc.stdout, 'stdout');
+    logAppOutput(appProc.stderr, 'stderr');
+
     const pidFile = join(projectDir, 'server.pid');
     await Bun.write(pidFile, appProc.pid.toString());
-
     appProc.unref();
 
-    await this.performHealthCheck(port);
+    if (buildId)
+      await LogService.stream(buildId, `Application started, performing health check...`);
+
+    try {
+      await this.performHealthCheck(port);
+      console.log(`[DeployService] Health check completed successfully for port ${port}`);
+      if (buildId) await LogService.stream(buildId, `Health check passed!`);
+    } catch (e) {
+      console.error(`[DeployService] Health check failed for port ${port}:`, e);
+      if (buildId) await LogService.stream(buildId, `❌ Health check failed: ${e}`);
+      throw e;
+    }
+  },
+
+  async ensureDependenciesInstalled(cwd: string) {
+    const nodeModulesPath = join(cwd, 'node_modules');
+    const packageJsonPath = join(cwd, 'package.json');
+
+    console.log(`[DeployService] ensureDependenciesInstalled called with cwd: ${cwd}`);
+    console.log(`[DeployService] Checking for package.json at: ${packageJsonPath}`);
+    console.log(`[DeployService] package.json exists: ${existsSync(packageJsonPath)}`);
+
+    // Check if package.json exists
+    if (!existsSync(packageJsonPath)) {
+      console.log(`[DeployService] No package.json found, skipping install`);
+      return;
+    }
+
+    // Always run install for fresh deployments
+    console.log(`[DeployService] Running: bun install in ${cwd}`);
+
+    const installProc = Bun.spawn(['bun', 'install'], {
+      cwd,
+      stdout: 'inherit',
+      stderr: 'inherit',
+    });
+    await installProc.exited;
+
+    console.log(`[DeployService] bun install exited with code: ${installProc.exitCode}`);
+
+    if (installProc.exitCode !== 0) {
+      console.error(`[DeployService] bun install failed with exit code ${installProc.exitCode}`);
+      throw new Error('Dependency install failed');
+    }
+
+    // Verify node_modules was created
+    console.log(
+      `[DeployService] node_modules exists after install: ${existsSync(nodeModulesPath)}`,
+    );
+    console.log(`[DeployService] Dependencies installed successfully`);
   },
 
   async performHealthCheck(port: number) {
@@ -257,11 +370,13 @@ export const DeployService = {
     while (Date.now() < deadline) {
       try {
         const res = await fetch(`http://localhost:${port}`);
+        console.log(`[DeployService] Health check response: ${res.status}`);
         if (res.ok || res.status < 500) {
           console.log(`[DeployService] Health check passed.`);
           return;
         }
       } catch {
+        // service not up yet - no need to log every retry
         // service not up yet
       }
 

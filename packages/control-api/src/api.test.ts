@@ -15,7 +15,7 @@ describe('Control API Properties', () => {
         fc.string(),
         fc.webUrl(),
         fc.string(),
-        fc.constantFrom('nextjs', 'vite'),
+        fc.constantFrom('nextjs', 'vite', 'express', 'hono', 'elysia'),
         async (name, github_url, build_command, app_type) => {
           // Mock DB insert
           const mockProject = {

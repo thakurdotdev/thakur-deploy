@@ -1,6 +1,5 @@
-import simpleGit from 'simple-git';
 import { existsSync, mkdirSync, rmSync } from 'fs';
-import { join } from 'path';
+import simpleGit from 'simple-git';
 
 export const GitService = {
   async clone(repoUrl: string, targetDir: string, token?: string) {
@@ -11,8 +10,6 @@ export const GitService = {
 
     let urlToClone = repoUrl;
     if (token) {
-      // repoUrl format: https://github.com/owner/repo OR https://github.com/owner/repo.git
-      // We inject token: https://x-access-token:TOKEN@github.com/owner/repo
       const urlObj = new URL(repoUrl);
       urlToClone = `https://x-access-token:${token}@${urlObj.hostname}${urlObj.pathname}`;
     }

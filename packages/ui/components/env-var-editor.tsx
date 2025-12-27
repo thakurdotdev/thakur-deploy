@@ -43,7 +43,18 @@ export function EnvVarEditor({ vars, onChange }: EnvVarEditorProps) {
       text.split('\n').forEach((line) => {
         const match = line.match(/^([^=]+)=(.*)$/);
         if (match) {
-          pastedVars.push({ key: match[1].trim(), value: match[2].trim() });
+          const key = match[1].trim();
+          let value = match[2].trim();
+
+          // Strip surrounding quotes if present
+          if (
+            (value.startsWith('"') && value.endsWith('"')) ||
+            (value.startsWith("'") && value.endsWith("'"))
+          ) {
+            value = value.slice(1, -1);
+          }
+
+          pastedVars.push({ key, value });
         }
       });
 
@@ -128,9 +139,20 @@ export function EnvVarEditor({ vars, onChange }: EnvVarEditorProps) {
                 if (!trimmed || trimmed.startsWith('#')) return;
                 const match = trimmed.match(/^([^=]+)=(.*)$/);
                 if (match) {
+                  const key = match[1].trim();
+                  let value = match[2].trim();
+
+                  // Strip surrounding quotes if present
+                  if (
+                    (value.startsWith('"') && value.endsWith('"')) ||
+                    (value.startsWith("'") && value.endsWith("'"))
+                  ) {
+                    value = value.slice(1, -1);
+                  }
+
                   newVars.push({
-                    key: match[1].trim(),
-                    value: match[2].trim(),
+                    key,
+                    value,
                   });
                 }
               });

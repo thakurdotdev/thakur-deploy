@@ -7,7 +7,9 @@ import { Label } from '@/components/ui/label';
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
@@ -17,6 +19,7 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { EnvVarEditor, EnvVar } from './env-var-editor';
+import { AppType, FRAMEWORK_OPTIONS, getDefaultBuildCommand } from '@/lib/framework-config';
 
 export function ManualProjectForm() {
   const router = useRouter();
@@ -25,11 +28,19 @@ export function ManualProjectForm() {
   const [formData, setFormData] = useState({
     name: '',
     github_url: '',
-    build_command: 'npm run build',
-    app_type: 'nextjs' as 'nextjs' | 'vite',
+    build_command: getDefaultBuildCommand('nextjs'),
+    app_type: 'nextjs' as AppType,
     root_directory: '',
     domain: '',
   });
+
+  const handleAppTypeChange = (value: AppType) => {
+    setFormData({
+      ...formData,
+      app_type: value,
+      build_command: getDefaultBuildCommand(value),
+    });
+  };
 
   const [envVars, setEnvVars] = useState<EnvVar[]>([]);
 
@@ -143,16 +154,27 @@ export function ManualProjectForm() {
 
             <div className="space-y-2">
               <Label htmlFor="app_type">Framework Preset</Label>
-              <Select
-                value={formData.app_type}
-                onValueChange={(value: any) => setFormData({ ...formData, app_type: value })}
-              >
+              <Select value={formData.app_type} onValueChange={handleAppTypeChange}>
                 <SelectTrigger>
                   <SelectValue placeholder="Select framework" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="nextjs">Next.js</SelectItem>
-                  <SelectItem value="vite">Vite / React</SelectItem>
+                  <SelectGroup>
+                    <SelectLabel>Frontend</SelectLabel>
+                    {FRAMEWORK_OPTIONS.filter((f) => f.category === 'Frontend').map((f) => (
+                      <SelectItem key={f.value} value={f.value}>
+                        {f.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                  <SelectGroup>
+                    <SelectLabel>Backend</SelectLabel>
+                    {FRAMEWORK_OPTIONS.filter((f) => f.category === 'Backend').map((f) => (
+                      <SelectItem key={f.value} value={f.value}>
+                        {f.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
                 </SelectContent>
               </Select>
             </div>

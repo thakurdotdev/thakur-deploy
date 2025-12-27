@@ -1,41 +1,37 @@
 import * as tar from 'tar';
 import { join } from 'path';
-import { existsSync } from 'fs';
+import { existsSync, readdirSync } from 'fs';
 import { unlink } from 'fs/promises';
+import { AppType, getExistingArtifactPaths, isBackendFramework } from '../config/framework-config';
 
 export const ArtifactService = {
-  async streamArtifact(buildId: string, projectDir: string, appType: 'nextjs' | 'vite') {
+  /**
+   * Creates a compressed tarball of the build output and streams it to the deploy engine.
+   * For backend apps: packages everything except node_modules.
+   * For frontend apps: packages specific build output directories.
+   */
+  async streamArtifact(buildId: string, projectDir: string, appType: AppType) {
     const deployEngineUrl = process.env.DEPLOY_ENGINE_URL || 'http://localhost:4002';
-
-    // Create a temp file path
     const tempArtifactPath = join(process.cwd(), `temp-${buildId}.tar.gz`);
 
-    let paths: string[] = [];
-    if (appType === 'nextjs') {
-      paths = [
-        '.next',
-        'public',
-        'package.json',
-        'bun.lockb',
-        'next.config.mjs',
-        'next.config.js',
-        'out', // Static export output
-      ];
-    } else if (appType === 'vite') {
-      paths = ['dist'];
-    }
+    let validPaths: string[];
 
-    // Filter paths that exist
-    const validPaths = paths.filter((p) => existsSync(join(projectDir, p)));
+    if (isBackendFramework(appType)) {
+      // For backend: include everything except node_modules
+      validPaths = readdirSync(projectDir).filter((f) => f !== 'node_modules' && f !== '.git');
+      console.log(`[ArtifactService] Backend app - packaging all files except node_modules`);
+    } else {
+      // For frontend: use selective paths from config
+      validPaths = getExistingArtifactPaths(appType, projectDir);
+    }
 
     if (validPaths.length === 0) {
       throw new Error('No build output found to package');
     }
 
     try {
-      console.log(`[ArtifactService] Creating compressed tarball at ${tempArtifactPath}`);
+      console.log(`[ArtifactService] Creating tarball with paths: ${validPaths.join(', ')}`);
 
-      // Create tarball to file first (more robust than piping streams across fetch)
       await tar.create(
         {
           gzip: true,
@@ -45,26 +41,24 @@ export const ArtifactService = {
         validPaths,
       );
 
-      console.log(`[ArtifactService] Uploading ${tempArtifactPath} to ${deployEngineUrl}`);
+      console.log(`[ArtifactService] Uploading artifact to ${deployEngineUrl}`);
 
       const file = Bun.file(tempArtifactPath);
 
       const response = await fetch(`${deployEngineUrl}/artifacts/upload?buildId=${buildId}`, {
         method: 'POST',
         body: file,
-        // No duplex needed for file bodies
       });
 
       if (!response.ok) {
         throw new Error(`Failed to upload artifact: ${response.statusText}`);
       }
 
-      console.log(`[ArtifactService] Upload finished with status ${response.status}`);
+      console.log(`[ArtifactService] Upload completed successfully`);
     } catch (e) {
       console.error(`[ArtifactService] Upload failed`, e);
       throw e;
     } finally {
-      // Cleanup temp file
       if (existsSync(tempArtifactPath)) {
         await unlink(tempArtifactPath);
       }

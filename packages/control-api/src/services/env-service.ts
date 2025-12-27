@@ -4,7 +4,7 @@ import { eq, and } from 'drizzle-orm';
 import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
 
 const ALGORITHM = 'aes-256-gcm';
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || '12345678901234567890123456789012'; // 32 chars
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY!;
 
 export const EnvService = {
   encrypt(text: string) {

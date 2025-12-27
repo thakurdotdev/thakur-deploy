@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Loader2, Check, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
@@ -8,15 +8,19 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
 import { GitRepository } from './repository-list';
 import { EnvVarEditor, EnvVar } from '../env-var-editor';
+import { AppType, FRAMEWORK_OPTIONS, getDefaultBuildCommand } from '@/lib/framework-config';
 
 interface ProjectConfigFormProps {
   repo: GitRepository;
@@ -27,20 +31,27 @@ interface ProjectConfigFormProps {
 
 export interface ProjectConfig {
   name: string;
-  appType: 'nextjs' | 'vite';
+  appType: AppType;
   buildCommand: string;
   rootDirectory: string;
   domain?: string;
   envVars: Record<string, string>;
+  autoDeploy: boolean;
 }
 
 export function ProjectConfigForm({ repo, loading, onBack, onSubmit }: ProjectConfigFormProps) {
   const [name, setName] = useState(repo.name.toLowerCase().replace(/[^a-z0-9-]/g, '-'));
   const [rootDirectory, setRootDirectory] = useState('./');
   const [domain, setDomain] = useState('');
-  const [appType, setAppType] = useState<'nextjs' | 'vite'>('nextjs');
-  const [buildCommand, setBuildCommand] = useState('npm run build');
+  const [appType, setAppType] = useState<AppType>('nextjs');
+  const [buildCommand, setBuildCommand] = useState(getDefaultBuildCommand('nextjs'));
+  const [autoDeploy, setAutoDeploy] = useState(true);
   const [envVars, setEnvVars] = useState<EnvVar[]>([]);
+
+  const handleAppTypeChange = (value: AppType) => {
+    setAppType(value);
+    setBuildCommand(getDefaultBuildCommand(value));
+  };
 
   const [subdomainStatus, setSubdomainStatus] = useState<
     'idle' | 'loading' | 'available' | 'unavailable'
@@ -83,7 +94,15 @@ export function ProjectConfigForm({ repo, loading, onBack, onSubmit }: ProjectCo
       {} as Record<string, string>,
     );
 
-    onSubmit({ name, appType, buildCommand, rootDirectory, domain, envVars: envVarsRecord });
+    onSubmit({
+      name,
+      appType,
+      buildCommand,
+      rootDirectory,
+      domain,
+      envVars: envVarsRecord,
+      autoDeploy,
+    });
   };
 
   return (
@@ -166,13 +185,27 @@ export function ProjectConfigForm({ repo, loading, onBack, onSubmit }: ProjectCo
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-2">
               <Label>Framework Preset</Label>
-              <Select value={appType} onValueChange={(v: any) => setAppType(v)}>
+              <Select value={appType} onValueChange={handleAppTypeChange}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="nextjs">Next.js</SelectItem>
-                  <SelectItem value="vite">Vite / React</SelectItem>
+                  <SelectGroup>
+                    <SelectLabel>Frontend</SelectLabel>
+                    {FRAMEWORK_OPTIONS.filter((f) => f.category === 'Frontend').map((f) => (
+                      <SelectItem key={f.value} value={f.value}>
+                        {f.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                  <SelectGroup>
+                    <SelectLabel>Backend</SelectLabel>
+                    {FRAMEWORK_OPTIONS.filter((f) => f.category === 'Backend').map((f) => (
+                      <SelectItem key={f.value} value={f.value}>
+                        {f.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
                 </SelectContent>
               </Select>
             </div>
@@ -180,6 +213,11 @@ export function ProjectConfigForm({ repo, loading, onBack, onSubmit }: ProjectCo
               <Label>Build Command</Label>
               <Input value={buildCommand} onChange={(e) => setBuildCommand(e.target.value)} />
             </div>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            <Switch id="auto-deploy" checked={autoDeploy} onCheckedChange={setAutoDeploy} />
+            <Label htmlFor="auto-deploy">Auto Deploy on push</Label>
           </div>
         </CardContent>
       </Card>

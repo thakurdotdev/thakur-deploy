@@ -26,10 +26,11 @@ export const WebSocketService = {
     });
   },
 
-  broadcast(buildId: string, message: string) {
+  broadcast(buildId: string, message: string, level: string = 'info') {
     io?.to(`build:${buildId}`).emit('build_log', {
       buildId,
       data: message,
+      level,
     });
   },
 

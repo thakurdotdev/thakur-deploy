@@ -3,11 +3,19 @@ import { DeploymentService } from '../services/deployment-service';
 import { BuildService } from '../services/build-service';
 
 export const deploymentsRoutes = new Elysia().group('/deploy', (app) =>
-  app.post('/build/:id/activate', async ({ params: { id } }) => {
-    const build = await BuildService.getById(id);
-    if (!build) throw new Error('Build not found');
+  app.post('/build/:id/activate', async ({ params: { id }, set }) => {
+    try {
+      const build = await BuildService.getById(id);
+      if (!build) {
+        set.status = 404;
+        return { error: 'Build not found' };
+      }
 
-    await DeploymentService.activateBuild(build.project_id, build.id);
-    return { success: true };
+      await DeploymentService.activateBuild(build.project_id, build.id);
+      return { success: true };
+    } catch (e: any) {
+      set.status = 400;
+      return { error: e.message };
+    }
   }),
 );

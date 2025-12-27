@@ -1,101 +1,176 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
+import { Project, Build, Deployment, EnvVar, LogEntry } from '@/lib/types';
+
 export const api = {
-  getProjects: async () => {
-    const res = await fetch(`${API_URL}/projects`);
-    if (!res.ok) throw new Error('Failed to fetch projects');
+  getProjects: async (): Promise<Project[]> => {
+    const res = await fetch(`${API_URL}/projects`, { credentials: 'include' });
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ error: 'Failed to fetch projects' }));
+      throw new Error(error.error || error.message || 'Failed to fetch projects');
+    }
     return res.json();
   },
-  createProject: async (data: any) => {
+  createProject: async (data: any): Promise<Project> => {
     const res = await fetch(`${API_URL}/projects`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
+      credentials: 'include',
     });
-    if (!res.ok) throw new Error('Failed to create project');
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ error: 'Failed to create project' }));
+      throw new Error(error.error || error.message || 'Failed to create project');
+    }
     return res.json();
   },
-  getProject: async (id: string) => {
-    const res = await fetch(`${API_URL}/projects/${id}`);
-    if (!res.ok) throw new Error('Failed to fetch project');
+  getProject: async (id: string): Promise<Project> => {
+    const res = await fetch(`${API_URL}/projects/${id}`, { credentials: 'include' });
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ error: 'Failed to fetch project' }));
+      throw new Error(error.error || error.message || 'Failed to fetch project');
+    }
     return res.json();
   },
-  getBuilds: async (projectId: string) => {
-    const res = await fetch(`${API_URL}/projects/${projectId}/builds`);
-    if (!res.ok) throw new Error('Failed to fetch builds');
+  getBuilds: async (projectId: string): Promise<Build[]> => {
+    const res = await fetch(`${API_URL}/projects/${projectId}/builds`, {
+      credentials: 'include',
+    });
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ error: 'Failed to fetch builds' }));
+      throw new Error(error.error || error.message || 'Failed to fetch builds');
+    }
     return res.json();
   },
-  triggerBuild: async (projectId: string) => {
+  triggerBuild: async (projectId: string): Promise<Build> => {
     const res = await fetch(`${API_URL}/projects/${projectId}/builds`, {
       method: 'POST',
+      credentials: 'include',
     });
-    if (!res.ok) throw new Error('Failed to trigger build');
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ error: 'Failed to trigger build' }));
+      throw new Error(error.error || error.message || 'Failed to trigger build');
+    }
     return res.json();
   },
-  getBuild: async (buildId: string) => {
-    const res = await fetch(`${API_URL}/builds/${buildId}`);
-    if (!res.ok) throw new Error('Failed to fetch build');
+  getBuild: async (buildId: string): Promise<Build> => {
+    const res = await fetch(`${API_URL}/builds/${buildId}`, { credentials: 'include' });
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ error: 'Failed to fetch build' }));
+      throw new Error(error.error || error.message || 'Failed to fetch build');
+    }
     return res.json();
   },
-  getBuildLogs: async (buildId: string) => {
-    const res = await fetch(`${API_URL}/builds/${buildId}/logs`);
+  getBuildLogs: async (buildId: string): Promise<LogEntry[]> => {
+    const res = await fetch(`${API_URL}/builds/${buildId}/logs`, {
+      credentials: 'include',
+    });
     if (!res.ok) throw new Error('Failed to fetch build logs');
-    return res.text();
-  },
-  getEnvVars: async (projectId: string) => {
-    const res = await fetch(`${API_URL}/projects/${projectId}/env`);
-    if (!res.ok) throw new Error('Failed to fetch env vars');
     return res.json();
   },
-  addEnvVar: async (projectId: string, data: any) => {
+  clearBuildLogs: async (buildId: string) => {
+    const res = await fetch(`${API_URL}/builds/${buildId}/logs`, {
+      method: 'DELETE',
+      credentials: 'include',
+    });
+    if (!res.ok) throw new Error('Failed to clear build logs');
+    return res.json();
+  },
+  getEnvVars: async (projectId: string): Promise<EnvVar[]> => {
+    const res = await fetch(`${API_URL}/projects/${projectId}/env`, { credentials: 'include' });
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ error: 'Failed to fetch env vars' }));
+      throw new Error(error.error || error.message || 'Failed to fetch env vars');
+    }
+    return res.json();
+  },
+  addEnvVar: async (projectId: string, data: any): Promise<EnvVar> => {
     const res = await fetch(`${API_URL}/projects/${projectId}/env`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
+      credentials: 'include',
     });
-    if (!res.ok) throw new Error('Failed to add env var');
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ error: 'Failed to add env var' }));
+      throw new Error(error.error || error.message || 'Failed to add env var');
+    }
     return res.json();
   },
   deleteEnvVar: async (projectId: string, key: string) => {
     const res = await fetch(`${API_URL}/projects/${projectId}/env/${key}`, {
       method: 'DELETE',
+      credentials: 'include',
     });
-    if (!res.ok) throw new Error('Failed to delete env var');
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ error: 'Failed to delete env var' }));
+      throw new Error(error.error || error.message || 'Failed to delete env var');
+    }
     return res.json();
   },
-  async activateBuild(buildId: string) {
+  async activateBuild(buildId: string): Promise<Deployment> {
     const res = await fetch(`${API_URL}/deploy/build/${buildId}/activate`, {
       method: 'POST',
+      credentials: 'include',
     });
-    if (!res.ok) throw new Error('Failed to activate build');
-    return res.json();
-  },
-
-  async getActiveDeployment(projectId: string) {
-    const res = await fetch(`${API_URL}/projects/${projectId}/deployment`);
     if (!res.ok) {
-      if (res.status === 404) return null;
-      throw new Error('Failed to get active deployment');
+      const error = await res.json().catch(() => ({ error: 'Failed to activate build' }));
+      throw new Error(error.error || error.message || 'Failed to activate build');
     }
     return res.json();
   },
 
-  async deleteProject(projectId: string) {
+  async getActiveDeployment(projectId: string): Promise<Deployment | null> {
+    const res = await fetch(`${API_URL}/projects/${projectId}/deployment`, {
+      credentials: 'include',
+    });
+    if (!res.ok) {
+      if (res.status === 404) return null;
+      const error = await res.json().catch(() => ({ error: 'Failed to get active deployment' }));
+      throw new Error(error.error || error.message || 'Failed to get active deployment');
+    }
+    return res.json();
+  },
+
+  async deleteProject(projectId: string): Promise<Project> {
     const res = await fetch(`${API_URL}/projects/${projectId}`, {
       method: 'DELETE',
+      credentials: 'include',
     });
-    if (!res.ok) throw new Error('Failed to delete project');
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ error: 'Failed to delete project' }));
+      throw new Error(error.error || error.message || 'Failed to delete project');
+    }
+    return res.json();
+  },
+  async updateProject(projectId: string, data: any): Promise<Project> {
+    const res = await fetch(`${API_URL}/projects/${projectId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+      credentials: 'include',
+    });
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ error: 'Failed to update project' }));
+      throw new Error(error.error || error.message || 'Failed to update project');
+    }
     return res.json();
   },
   async stopDeployment(projectId: string) {
     const res = await fetch(`${API_URL}/projects/${projectId}/stop`, {
       method: 'POST',
+      credentials: 'include',
     });
-    if (!res.ok) throw new Error('Failed to stop deployment');
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ error: 'Failed to stop deployment' }));
+      throw new Error(error.error || error.message || 'Failed to stop deployment');
+    }
     return res.json();
   },
   async checkDomainAvailability(subdomain: string) {
-    const res = await fetch(`${API_URL}/domains/check?subdomain=${subdomain}`);
+    const res = await fetch(`${API_URL}/domains/check?subdomain=${subdomain}`, {
+      credentials: 'include',
+    });
     if (!res.ok) {
       const err = await res.json();
       throw new Error(err.error || 'Failed to check domain');
@@ -108,7 +183,12 @@ export const api = {
     const res = await fetch(`${API_URL}/github/installations`, {
       credentials: 'include',
     });
-    if (!res.ok) throw new Error('Failed to fetch GitHub installations');
+    if (!res.ok) {
+      const error = await res
+        .json()
+        .catch(() => ({ error: 'Failed to fetch GitHub installations' }));
+      throw new Error(error.error || error.message || 'Failed to fetch GitHub installations');
+    }
     return res.json();
   },
 
@@ -116,7 +196,10 @@ export const api = {
     const res = await fetch(`${API_URL}/github/installations/${installationId}/repositories`, {
       credentials: 'include',
     });
-    if (!res.ok) throw new Error('Failed to fetch repositories');
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ error: 'Failed to fetch repositories' }));
+      throw new Error(error.error || error.message || 'Failed to fetch repositories');
+    }
     return res.json();
   },
 };

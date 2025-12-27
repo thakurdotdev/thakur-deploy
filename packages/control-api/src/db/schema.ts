@@ -7,6 +7,7 @@ import {
   uuid,
   varchar,
   boolean,
+  uniqueIndex,
 } from 'drizzle-orm/pg-core';
 
 export const projects = pgTable('projects', {
@@ -15,7 +16,7 @@ export const projects = pgTable('projects', {
   github_url: text('github_url').notNull(),
   root_directory: text('root_directory').default('./'),
   build_command: text('build_command').notNull(),
-  app_type: varchar('app_type', { length: 50 }).notNull(), // 'nextjs' | 'vite'
+  app_type: varchar('app_type', { length: 50 }).notNull(), // Frontend: 'nextjs' | 'vite' | Backend: 'express' | 'hono' | 'elysia'
   domain: varchar('domain', { length: 255 }).unique(),
   port: integer('port').unique(),
   github_repo_id: text('github_repo_id'),
@@ -24,6 +25,7 @@ export const projects = pgTable('projects', {
   github_installation_id: text('github_installation_id').references(
     () => githubInstallations.github_installation_id,
   ),
+  auto_deploy: boolean('auto_deploy').default(true).notNull(),
   created_at: timestamp('created_at').defaultNow().notNull(),
   updated_at: timestamp('updated_at').defaultNow().notNull(),
 });
@@ -84,6 +86,7 @@ export const environmentVariables = pgTable(
   (table) => {
     return {
       projectIdIdx: index('env_vars_project_id_idx').on(table.project_id),
+      projectKeyUnique: uniqueIndex('env_vars_project_key_unique').on(table.project_id, table.key),
     };
   },
 );
@@ -146,3 +149,26 @@ export const githubInstallations = pgTable('github_installations', {
   account_type: text('account_type').notNull(), // 'User' or 'Organization'
   created_at: timestamp('created_at').defaultNow().notNull(),
 });
+
+// Structured build logs table for scalable log storage
+export const buildLogs = pgTable(
+  'build_logs',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    build_id: uuid('build_id')
+      .references(() => builds.id, { onDelete: 'cascade' })
+      .notNull(),
+    level: varchar('level', { length: 20 }).notNull(), // 'info' | 'warning' | 'error' | 'success' | 'deploy'
+    message: text('message').notNull(),
+    timestamp: timestamp('timestamp').defaultNow().notNull(),
+  },
+  (table) => {
+    return {
+      buildIdIdx: index('build_logs_build_id_idx').on(table.build_id),
+      timestampIdx: index('build_logs_timestamp_idx').on(table.build_id, table.timestamp),
+    };
+  },
+);
+
+// Log level type for type safety
+export type LogLevel = 'info' | 'warning' | 'error' | 'success' | 'deploy';

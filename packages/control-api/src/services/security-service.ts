@@ -8,7 +8,6 @@ export const SecurityService = {
       'eval',
       '|',
       ';',
-      '&&',
       '>',
       '<',
       '/etc/passwd',
@@ -19,19 +18,26 @@ export const SecurityService = {
 
     const allowedPrefixes = ['npm', 'yarn', 'pnpm', 'bun', 'echo', 'ls'];
 
-    // 1. Check for dangerous patterns
+    // 1. Check for dangerous patterns (excluding && which we handle specially)
     for (const pattern of dangerousPatterns) {
       if (command.includes(pattern)) {
         throw new Error(`Command contains dangerous pattern: "${pattern}"`);
       }
     }
 
-    // 2. Enforce allowlist for command start
-    // This assumes simple commands like "npm run build" or "bun build"
-    const startsWithAllowed = allowedPrefixes.some((prefix) => command.trim().startsWith(prefix));
+    // 2. Split by && and validate each part starts with allowed prefix
+    const commandParts = command.split('&&').map((part) => part.trim());
 
-    if (!startsWithAllowed) {
-      throw new Error(`Command must start with one of: ${allowedPrefixes.join(', ')}`);
+    for (const part of commandParts) {
+      if (!part) continue; // Skip empty parts
+
+      const startsWithAllowed = allowedPrefixes.some((prefix) => part.startsWith(prefix));
+
+      if (!startsWithAllowed) {
+        throw new Error(
+          `Each command must start with one of: ${allowedPrefixes.join(', ')}. Invalid: "${part}"`,
+        );
+      }
     }
 
     return true;

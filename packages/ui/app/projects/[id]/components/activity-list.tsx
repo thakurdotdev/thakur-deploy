@@ -1,10 +1,10 @@
 'use client';
 
-import { Card, CardContent } from '@/components/ui/card';
-import { ScrollArea } from '@/components/ui/scroll-area';
+import { LogViewer } from '@/components/log-viewer/log-viewer';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Activity, GitBranch, Terminal, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
+import { Card } from '@/components/ui/card';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   Sheet,
   SheetContent,
@@ -13,7 +13,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from '@/components/ui/sheet';
-import { LogViewer } from '@/components/log-viewer';
+import { Activity, CheckCircle2, GitBranch, Loader2, Terminal, XCircle } from 'lucide-react';
 
 interface ActivityListProps {
   builds: any[];

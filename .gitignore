@@ -12,3 +12,5 @@ dist/
 packages/*/dist/
 
 *.pem
+server.pid
+debug.log

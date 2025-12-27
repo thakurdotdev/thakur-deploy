@@ -3,7 +3,7 @@ import { Elysia } from 'elysia';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { Server as IOServer } from 'socket.io';
 import { auth } from './lib/auth';
-import { buildsRoutes } from './routes/builds';
+import { buildsRoutes, internalBuildRoutes } from './routes/builds';
 import { deploymentsRoutes } from './routes/deployments';
 import { domainsRoutes } from './routes/domains';
 import { envRoutes } from './routes/env';
@@ -14,6 +14,30 @@ import { WebSocketService } from './ws';
 
 // 1. Create your Elysia app
 const app = new Elysia()
+  .onError(({ code, error, set }) => {
+    console.error('API Error:', error);
+
+    // Safely extract error message
+    const errorMessage = error instanceof Error ? error.message : String(error);
+
+    // Handle specific error codes
+    if (code === 'NOT_FOUND') {
+      set.status = 404;
+      return { error: 'Not Found', message: errorMessage };
+    }
+    if (code === 'VALIDATION') {
+      set.status = 400;
+      return { error: 'Validation Error', message: errorMessage };
+    }
+    if (code === 'PARSE') {
+      set.status = 400;
+      return { error: 'Parse Error', message: errorMessage };
+    }
+
+    // Default to 500 for unexpected errors
+    set.status = 500;
+    return { error: 'Internal Server Error', message: errorMessage };
+  })
   .use(
     cors({
       origin: process.env.CLIENT_URL!,
@@ -22,14 +46,30 @@ const app = new Elysia()
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     }),
   )
-  .use(projectsRoutes)
-  .use(buildsRoutes)
-  .use(envRoutes)
-  .use(deploymentsRoutes)
-  .use(domainsRoutes)
   .use(githubWebhook)
   .use(githubRoutes)
+  .use(internalBuildRoutes)
   .mount(auth.handler)
+  .guard(
+    {
+      async beforeHandle({ request, set }) {
+        const session = await auth.api.getSession({
+          headers: request.headers,
+        });
+
+        if (!session) {
+          return new Response('Unauthorized', { status: 401 });
+        }
+      },
+    },
+    (app) =>
+      app
+        .use(projectsRoutes)
+        .use(buildsRoutes)
+        .use(envRoutes)
+        .use(deploymentsRoutes)
+        .use(domainsRoutes),
+  )
   .get('/', () => 'Hello from Thakur Deploy');
 
 // 2. Create Socket.IO server

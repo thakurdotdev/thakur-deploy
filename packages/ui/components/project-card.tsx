@@ -4,6 +4,7 @@ import { ArrowRight, GitBranch, Github } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { Badge } from './ui/badge';
+import { getFrameworkOption } from '@/lib/framework-config';
 
 export function ProjectCard({ project }: { project: any }) {
   const faviconUrl = project.domain
@@ -13,24 +14,10 @@ export function ProjectCard({ project }: { project: any }) {
   const isReady = !!project.domain;
 
   const FrameworkBadge = ({ type }: { type: string }) => {
-    if (type === 'nextjs')
-      return (
-        <Badge variant="secondary" className="text-[10px] h-5 px-1.5 font-normal tracking-wide">
-          Next.js
-        </Badge>
-      );
-    if (type === 'vite')
-      return (
-        <Badge variant="secondary" className="text-[10px] h-5 px-1.5 font-normal tracking-wide">
-          Vite
-        </Badge>
-      );
+    const framework = getFrameworkOption(type as any);
     return (
-      <Badge
-        variant="secondary"
-        className="text-[10px] h-5 px-1.5 font-normal tracking-wide uppercase"
-      >
-        {type}
+      <Badge variant="secondary" className="text-[10px] h-5 px-1.5 font-normal tracking-wide">
+        {framework?.label ?? type}
       </Badge>
     );
   };
