@@ -1,13 +1,9 @@
-import { Elysia, t } from 'elysia';
+import { Elysia } from 'elysia';
 import { BuildService } from '../services/build-service';
 import { ProjectService } from '../services/project-service';
-import { JobQueue } from '../queue';
 import { LogService } from '../services/log-service';
 import { WebSocketService } from '../ws';
-import { db } from '../db';
-import { deployments, LogLevel } from '../db/schema';
-import { eq, and } from 'drizzle-orm';
-import { DeploymentService } from '../services/deployment-service';
+import { LogLevel } from '../db/schema';
 
 export const buildsRoutes = new Elysia()
   .group('/projects/:id/builds', (app) =>
@@ -63,15 +59,7 @@ export const internalBuildRoutes = new Elysia().group('/builds', (app) =>
 
       if (updated) {
         WebSocketService.broadcastBuildUpdate(updated.project_id, updated);
-
-        // Auto-Deploy logic is now handled in BuildService.updateStatus()
-        // Removed duplicate activation here to prevent double deployments
       }
       return updated;
-    })
-    // Admin endpoint to clear all jobs from queue
-    .delete('/queue', async () => {
-      await JobQueue.clearAllJobs();
-      return { success: true, message: 'All jobs cleared from queue' };
     }),
 );
