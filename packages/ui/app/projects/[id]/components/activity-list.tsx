@@ -13,7 +13,15 @@ import {
   SheetTitle,
   SheetTrigger,
 } from '@/components/ui/sheet';
-import { Activity, CheckCircle2, GitBranch, Loader2, Terminal, XCircle } from 'lucide-react';
+import {
+  Activity,
+  CheckCircle2,
+  GitBranch,
+  GitCommit,
+  Loader2,
+  Terminal,
+  XCircle,
+} from 'lucide-react';
 
 interface ActivityListProps {
   builds: any[];
@@ -49,8 +57,34 @@ export function ActivityList({ builds, activeDeployment, onActivateBuild }: Acti
                       </div>
                       <div className="text-xs text-muted-foreground flex items-center gap-3 mt-1">
                         <span className="flex items-center gap-1">
-                          <GitBranch className="w-3 h-3" /> main
+                          <GitBranch className="w-3 h-3" />
+                          main
                         </span>
+                        {build.commit_sha ? (
+                          <>
+                            <span>•</span>
+                            <span className="flex items-center gap-1 font-mono">
+                              <GitCommit className="w-3 h-3" />
+                              {build.commit_sha.slice(0, 7)}
+                            </span>
+                            {build.commit_message && (
+                              <>
+                                <span>•</span>
+                                <span
+                                  className="truncate max-w-[200px]"
+                                  title={build.commit_message}
+                                >
+                                  {build.commit_message.split('\n')[0]}
+                                </span>
+                              </>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            <span>•</span>
+                            <span className="italic">Manual Deploy</span>
+                          </>
+                        )}
                         <span>•</span>
                         <span>{new Date(build.created_at).toLocaleString()}</span>
                       </div>

@@ -10,25 +10,32 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
 
-export const projects = pgTable('projects', {
-  id: uuid('id').defaultRandom().primaryKey(),
-  name: varchar('name', { length: 255 }).notNull(),
-  github_url: text('github_url').notNull(),
-  root_directory: text('root_directory').default('./'),
-  build_command: text('build_command').notNull(),
-  app_type: varchar('app_type', { length: 50 }).notNull(), // Frontend: 'nextjs' | 'vite' | Backend: 'express' | 'hono' | 'elysia'
-  domain: varchar('domain', { length: 255 }).unique(),
-  port: integer('port').unique(),
-  github_repo_id: text('github_repo_id'),
-  github_repo_full_name: text('github_repo_full_name'),
-  github_branch: text('github_branch').default('main'),
-  github_installation_id: text('github_installation_id').references(
-    () => githubInstallations.github_installation_id,
-  ),
-  auto_deploy: boolean('auto_deploy').default(true).notNull(),
-  created_at: timestamp('created_at').defaultNow().notNull(),
-  updated_at: timestamp('updated_at').defaultNow().notNull(),
-});
+export const projects = pgTable(
+  'projects',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    name: varchar('name', { length: 255 }).notNull(),
+    github_url: text('github_url').notNull(),
+    root_directory: text('root_directory').default('./'),
+    build_command: text('build_command').notNull(),
+    app_type: varchar('app_type', { length: 50 }).notNull(), // Frontend: 'nextjs' | 'vite' | Backend: 'express' | 'hono' | 'elysia'
+    domain: varchar('domain', { length: 255 }).unique(),
+    port: integer('port').unique(),
+    github_repo_id: text('github_repo_id'),
+    github_repo_full_name: text('github_repo_full_name'),
+    github_branch: text('github_branch').default('main'),
+    github_installation_id: text('github_installation_id').references(
+      () => githubInstallations.github_installation_id,
+    ),
+    auto_deploy: boolean('auto_deploy').default(true).notNull(),
+    created_at: timestamp('created_at').defaultNow().notNull(),
+    updated_at: timestamp('updated_at').defaultNow().notNull(),
+  },
+  (table) => ({
+    // Composite index for fast webhook lookups by repo + branch
+    githubRepoIdx: index('projects_github_repo_idx').on(table.github_repo_id, table.github_branch),
+  }),
+);
 
 export const builds = pgTable(
   'builds',
@@ -38,6 +45,8 @@ export const builds = pgTable(
       .references(() => projects.id)
       .notNull(),
     status: varchar('status', { length: 50 }).notNull(), // 'pending' | 'building' | 'success' | 'failed'
+    commit_sha: text('commit_sha'), // For duplicate build detection
+    commit_message: text('commit_message'), // Git commit message
     logs: text('logs'),
     artifact_id: varchar('artifact_id', { length: 255 }),
     created_at: timestamp('created_at').defaultNow().notNull(),

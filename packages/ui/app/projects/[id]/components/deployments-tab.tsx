@@ -11,7 +11,7 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { GitBranch, Clock, Terminal, Box, Loader2 } from 'lucide-react';
+import { GitBranch, GitCommit, Clock, Terminal, Box, Loader2 } from 'lucide-react';
 import {
   Sheet,
   SheetContent,
@@ -93,9 +93,27 @@ export function DeploymentsTab({ builds, onActivateBuild, activeDeployment }: De
                     </Badge>
                   </TableCell>
                   <TableCell>
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <GitBranch className="w-3 h-3" />
-                      <span>main</span>
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <GitBranch className="w-3 h-3" />
+                        <span>main</span>
+                      </div>
+                      {build.commit_sha ? (
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground/70">
+                          <GitCommit className="w-3 h-3" />
+                          <span className="font-mono">{build.commit_sha.slice(0, 7)}</span>
+                          {build.commit_message && (
+                            <span className="truncate max-w-[200px]" title={build.commit_message}>
+                              {build.commit_message.split('\n')[0].slice(0, 50)}
+                              {build.commit_message.length > 50 ? '...' : ''}
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-muted-foreground/70 italic">
+                          Manual Deploy
+                        </span>
+                      )}
                     </div>
                   </TableCell>
                   <TableCell>
