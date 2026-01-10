@@ -4,6 +4,7 @@ import { ProjectService } from '../services/project-service';
 import { LogService } from '../services/log-service';
 import { WebSocketService } from '../ws';
 import { LogLevel } from '../db/schema';
+import { BuildQueue } from '../queue';
 
 export const buildsRoutes = new Elysia()
   .group('/projects/:id/builds', (app) =>
@@ -28,6 +29,10 @@ export const buildsRoutes = new Elysia()
   )
   .group('/builds', (app) =>
     app
+      .get('/queue/stats', async () => {
+        // Get queue statistics
+        return await BuildQueue.getQueueInfo();
+      })
       .get('/:id', async ({ params: { id }, set }) => {
         const build = await BuildService.getById(id);
         if (!build) {
@@ -35,6 +40,19 @@ export const buildsRoutes = new Elysia()
           return { error: 'Build not found' };
         }
         return build;
+      })
+      .get('/:id/queue-position', async ({ params: { id } }) => {
+        // Get job position in queue
+        const position = await BuildQueue.getJobPosition(id);
+        const stats = await BuildQueue.getStats();
+        return {
+          position,
+          totalWaiting: stats.waiting,
+          totalActive: stats.active,
+          isActive: position === 0,
+          isWaiting: position > 0,
+          notFound: position === -1,
+        };
       })
       .get('/:id/logs', async ({ params: { id } }) => {
         return await LogService.getLogs(id);

@@ -13,8 +13,10 @@
     "@elysiajs/cors": "^1.4.0",
     "@sinclair/typebox": "^0.34.41",
     "better-auth": "^1.4.5",
+    "bullmq": "^5.66.4",
     "drizzle-orm": "^0.30.10",
     "elysia": "latest",
+    "ioredis": "^5.9.1",
     "jsonwebtoken": "^9.0.3",
     "postgres": "^3.4.7",
     "socket.io": "^4.8.1"

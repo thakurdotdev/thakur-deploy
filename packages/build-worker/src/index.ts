@@ -1,5 +1,6 @@
 import { Elysia } from 'elysia';
 import { Builder } from './services/builder';
+import { BuildWorker } from './queue';
 
 // Prevent crash on unhandled errors to stop restart loops
 process.on('uncaughtException', (err) => {
@@ -11,19 +12,31 @@ process.on('unhandledRejection', (reason, promise) => {
 
 console.log('🚀 Starting Build Worker...');
 
-// HTTP-based build worker (no Redis/BullMQ dependency)
+// Initialize BullMQ worker
+BuildWorker.initialize().catch((err) => {
+  console.error('[BuildWorker] Failed to initialize:', err);
+  process.exit(1);
+});
+
+// HTTP server for health checks and fallback direct build triggering
 const app = new Elysia()
   .get('/', () => 'Build Worker is running')
-  .get('/health', () => ({ status: 'healthy', timestamp: new Date().toISOString() }))
+  .get('/health', () => ({
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    workerRunning: BuildWorker.isRunning(),
+  }))
+  // Keep HTTP endpoint as fallback for direct builds (optional)
   .post('/build', async ({ body }) => {
     const job = body as any;
-    console.log(`[Build] Received request for ${job.build_id}`);
+    console.log(`[Build] Received direct HTTP request for ${job.build_id}`);
+    console.log(`[Build] Note: Consider using the queue for better reliability`);
     try {
       // Run build asynchronously (don't block the response)
       Builder.execute(job).catch((err) => {
         console.error(`[Build] ${job.build_id} failed:`, err);
       });
-      return { success: true, message: 'Build started', build_id: job.build_id };
+      return { success: true, message: 'Build started (direct)', build_id: job.build_id };
     } catch (error: any) {
       console.error(`[Build] Failed to start:`, error);
       return { success: false, error: error.message };
@@ -32,10 +45,20 @@ const app = new Elysia()
   .listen(4001);
 
 console.log(`👷 Build Worker is running at ${app.server?.hostname}:${app.server?.port}`);
+console.log(`📋 Queue: Listening for jobs from Redis queue`);
+console.log(`🔌 HTTP: Fallback endpoint available at /build`);
 
 const gracefulShutdown = async (signal: string) => {
-  console.log(`Received ${signal}, shutting down...`);
-  process.exit(0);
+  console.log(`\nReceived ${signal}, shutting down gracefully...`);
+
+  try {
+    // Shutdown worker (waits for current job to complete)
+    await BuildWorker.shutdown();
+    process.exit(0);
+  } catch (err) {
+    console.error('Error during shutdown:', err);
+    process.exit(1);
+  }
 };
 
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));

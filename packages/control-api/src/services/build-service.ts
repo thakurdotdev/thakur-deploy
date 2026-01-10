@@ -3,108 +3,7 @@ import { builds, deployments } from '../db/schema';
 import { eq, desc } from 'drizzle-orm';
 import { DeploymentService } from './deployment-service';
 import { AppType } from '../config/framework-config';
-
-// Retry configuration
-const RETRY_CONFIG = {
-  maxRetries: 3,
-  baseDelayMs: 1000, // 1 second
-  timeoutMs: 10000, // 10 seconds
-};
-
-/**
- * Sleep for a specified number of milliseconds
- */
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * Fetch with timeout support
- */
-async function fetchWithTimeout(
-  url: string,
-  options: RequestInit,
-  timeoutMs: number,
-): Promise<Response> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal,
-    });
-    return response;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-/**
- * Trigger build with exponential backoff retry
- */
-async function triggerBuildWithRetry(
-  buildWorkerUrl: string,
-  buildJob: object,
-  buildId: string,
-): Promise<{ success: boolean; error?: string }> {
-  let lastError: string = '';
-
-  for (let attempt = 1; attempt <= RETRY_CONFIG.maxRetries; attempt++) {
-    try {
-      console.log(
-        `[BuildService] Triggering build ${buildId} (attempt ${attempt}/${RETRY_CONFIG.maxRetries})`,
-      );
-
-      const res = await fetchWithTimeout(
-        `${buildWorkerUrl}/build`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(buildJob),
-        },
-        RETRY_CONFIG.timeoutMs,
-      );
-
-      if (res.ok) {
-        console.log(`[BuildService] Build ${buildId} triggered successfully`);
-        return { success: true };
-      }
-
-      // Non-retryable errors (4xx client errors)
-      if (res.status >= 400 && res.status < 500) {
-        const errorText = await res.text();
-        console.error(
-          `[BuildService] Build ${buildId} failed with client error: ${res.status} - ${errorText}`,
-        );
-        return { success: false, error: `Client error: ${res.status}` };
-      }
-
-      // Server error - will retry
-      lastError = `HTTP ${res.status}: ${res.statusText}`;
-      console.warn(`[BuildService] Build ${buildId} attempt ${attempt} failed: ${lastError}`);
-    } catch (err: any) {
-      if (err.name === 'AbortError') {
-        lastError = 'Request timeout';
-      } else {
-        lastError = err.message || 'Unknown error';
-      }
-      console.warn(`[BuildService] Build ${buildId} attempt ${attempt} failed: ${lastError}`);
-    }
-
-    // Exponential backoff before retry (skip on last attempt)
-    if (attempt < RETRY_CONFIG.maxRetries) {
-      const delay = RETRY_CONFIG.baseDelayMs * Math.pow(2, attempt - 1);
-      console.log(`[BuildService] Retrying in ${delay}ms...`);
-      await sleep(delay);
-    }
-  }
-
-  console.error(
-    `[BuildService] Build ${buildId} failed after ${RETRY_CONFIG.maxRetries} attempts: ${lastError}`,
-  );
-  return { success: false, error: lastError };
-}
+import { BuildQueue, type BuildJobData } from '../queue';
 
 export const BuildService = {
   async create(data: {
@@ -127,6 +26,7 @@ export const BuildService = {
     if (data.status === 'pending') {
       const { ProjectService } = await import('./project-service');
       const { EnvService } = await import('./env-service');
+      const { LogService } = await import('./log-service');
 
       const project = await ProjectService.getById(data.project_id);
       if (project) {
@@ -136,7 +36,7 @@ export const BuildService = {
           {} as Record<string, string>,
         );
 
-        const buildJob = {
+        const buildJobData: BuildJobData = {
           build_id: build.id,
           project_id: project.id,
           github_url: project.github_url,
@@ -147,23 +47,51 @@ export const BuildService = {
           installation_id: project.github_installation_id || undefined,
         };
 
-        const buildWorkerUrl = process.env.BUILD_WORKER_URL || 'http://localhost:4001';
+        try {
+          // Add job to BullMQ queue
+          const { jobId, position } = await BuildQueue.addJob(buildJobData);
 
-        // Trigger build with retry logic
-        const result = await triggerBuildWithRetry(buildWorkerUrl, buildJob, build.id);
+          console.log(`[BuildService] Build ${build.id} queued at position ${position}`);
 
-        // If all retries failed, mark build as failed
-        if (!result.success) {
+          // Log initial queue status
+          const stats = await BuildQueue.getStats();
+          const totalInQueue = stats.waiting + stats.active;
+
+          if (position > 0) {
+            await LogService.persist(
+              build.id,
+              `🔄 Build queued (position ${position} of ${totalInQueue})\n`,
+              'info',
+            );
+
+            if (stats.active > 0) {
+              await LogService.persist(
+                build.id,
+                `⏳ Waiting for ${stats.active} active build(s) to complete...\n`,
+                'info',
+              );
+            }
+          } else {
+            await LogService.persist(
+              build.id,
+              `🚀 Build starting immediately (no queue)\n`,
+              'info',
+            );
+          }
+        } catch (error: any) {
+          console.error(`[BuildService] Failed to queue build ${build.id}:`, error);
+
+          // Mark build as failed if queue submission fails
           await db
             .update(builds)
             .set({
               status: 'failed',
-              logs: `Build trigger failed: ${result.error}`,
+              logs: `Failed to queue build: ${error.message}`,
               completed_at: new Date(),
             })
             .where(eq(builds.id, build.id));
 
-          console.error(`[BuildService] Build ${build.id} marked as failed due to trigger failure`);
+          console.error(`[BuildService] Build ${build.id} marked as failed due to queue error`);
         }
       }
     }

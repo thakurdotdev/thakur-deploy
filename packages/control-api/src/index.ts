@@ -11,6 +11,7 @@ import { projectsRoutes } from './routes/projects';
 import { githubWebhook } from './routes/webhook-handler';
 import { githubRoutes } from './routes/github';
 import { WebSocketService } from './ws';
+import { BuildQueue } from './queue';
 
 // 1. Create your Elysia app
 const app = new Elysia()
@@ -84,6 +85,11 @@ const io = new IOServer({
 // 3. Initialize your WebSocketService
 WebSocketService.initialize(io);
 
+// 4. Initialize Build Queue
+BuildQueue.initialize().catch((err) => {
+  console.error('[BuildQueue] Failed to initialize:', err);
+});
+
 // 4. Create Node.js compatible HTTP server manually to support Socket.IO on the same port
 const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
   if (req.url?.startsWith('/socket.io/')) {
@@ -141,7 +147,24 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
 // 5. Attach Socket.IO to the server
 io.attach(server);
 
-// 6. Listen on port 4000
+// 7. Listen on port 4000
 server.listen(4000, () => {
   console.log('Control API + Socket.IO running on port 4000 🚀');
 });
+
+// 8. Graceful shutdown
+const gracefulShutdown = async (signal: string) => {
+  console.log(`\nReceived ${signal}, shutting down gracefully...`);
+
+  try {
+    await BuildQueue.shutdown();
+    server.close();
+    process.exit(0);
+  } catch (err) {
+    console.error('Error during shutdown:', err);
+    process.exit(1);
+  }
+};
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));

@@ -77,28 +77,49 @@ export const DeployService = {
   ) {
     const paths = this.getPaths(projectId, buildId);
 
+    // Step 1: Verify artifact exists
+    await LogService.step(buildId, 'Starting deployment activation');
+    await LogService.detail(buildId, `Project: ${projectId}`);
+    await LogService.detail(buildId, `Framework: ${appType}`);
+    await LogService.detail(buildId, `Port: ${port}`);
+
     if (!existsSync(paths.artifact)) {
+      await LogService.error(buildId, `Artifact not found: ${paths.artifact}`);
       throw new Error(`Artifact not found: ${paths.artifact}`);
     }
+    await LogService.detail(buildId, 'Artifact verified');
 
-    await LogService.stream(buildId, 'Starting deployment...');
-
+    // Step 2: Extract artifact
+    await LogService.step(buildId, 'Extracting build artifact');
     mkdirSync(paths.extractDir, { recursive: true });
 
-    await LogService.stream(buildId, 'Extracting artifact...');
-    await retry(() => this.extractArtifact(paths.artifact, paths.extractDir), {
-      name: 'artifact extraction',
-      timeoutMs: 8000,
-    });
+    try {
+      await retry(() => this.extractArtifact(paths.artifact, paths.extractDir), {
+        name: 'artifact extraction',
+        timeoutMs: 8000,
+      });
+      await LogService.success(buildId, 'Artifact extracted successfully');
+    } catch (e: any) {
+      await LogService.error(buildId, `Failed to extract artifact: ${e.message}`);
+      throw e;
+    }
 
-    // Update symlink for tracking
-    await retry(() => this.updateSymlink(paths.projectDir, paths.extractDir, buildId), {
-      name: 'symlink update',
-    });
+    // Step 3: Update symlink for tracking
+    await LogService.step(buildId, 'Updating deployment symlinks');
+    try {
+      await retry(() => this.updateSymlink(paths.projectDir, paths.extractDir, buildId), {
+        name: 'symlink update',
+      });
+      await LogService.detail(buildId, 'Symlinks updated');
+    } catch (e: any) {
+      await LogService.error(buildId, `Failed to update symlinks: ${e.message}`);
+      throw e;
+    }
 
-    // Use Docker or direct process based on feature flag
+    // Step 4: Start application (Docker or direct)
     if (USE_DOCKER) {
-      await LogService.stream(buildId, 'Using Docker containerization...');
+      await LogService.step(buildId, 'Starting containerized deployment');
+      await LogService.detail(buildId, 'Using Docker for isolation');
 
       const result = await DockerService.deploy(
         projectId,
@@ -110,13 +131,20 @@ export const DeployService = {
       );
 
       if (!result.success) {
+        await LogService.error(buildId, `Docker deployment failed: ${result.error}`);
         throw new Error(`Docker deployment failed: ${result.error}`);
       }
+      await LogService.success(buildId, 'Container started successfully');
     } else {
       // Legacy: direct process execution
+      await LogService.step(buildId, 'Preparing application environment');
+
+      // Stop any existing process
+      await LogService.detail(buildId, 'Stopping previous deployment if exists');
       await this.killProjectProcess(projectId, port);
 
-      await LogService.stream(buildId, `Starting ${appType} application...`);
+      // Start the application
+      await LogService.step(buildId, `Starting ${appType} application`);
       await this.startApplication(
         paths.extractDir,
         port,
@@ -127,32 +155,49 @@ export const DeployService = {
       );
     }
 
+    // Step 5: Configure domain (production only)
     if (IS_PLATFORM_PROD) {
-      await LogService.stream(buildId, `Configuring domain...`);
-      await retry(() => NginxService.createConfig(subdomain, port), {
-        name: `nginx config ${subdomain}`,
-        timeoutMs: 6000,
-      });
+      await LogService.step(buildId, 'Configuring domain routing');
+      await LogService.detail(buildId, `Subdomain: ${subdomain}`);
+      try {
+        await retry(() => NginxService.createConfig(subdomain, port), {
+          name: `nginx config ${subdomain}`,
+          timeoutMs: 6000,
+        });
+        await LogService.success(buildId, 'Domain configured successfully');
+      } catch (e: any) {
+        await LogService.warning(buildId, `Domain configuration warning: ${e.message}`);
+        // Don't fail deployment for nginx issues
+      }
     }
 
-    await LogService.stream(buildId, '✅ Deployment successful!');
+    // Final success
+    await LogService.step(buildId, 'Deployment complete');
+    await LogService.success(buildId, 'Your application is now live! 🎉');
+
     return { success: true };
   },
 
   async stopDeployment(port: number, projectId?: string, buildId?: string) {
-    if (buildId) await LogService.stream(buildId, 'Stopping deployment...');
+    if (buildId) {
+      await LogService.step(buildId, 'Stopping deployment');
+    }
 
     if (projectId) {
       if (USE_DOCKER) {
+        if (buildId) await LogService.detail(buildId, 'Stopping Docker container');
         await DockerService.stop(projectId, buildId);
       } else {
+        if (buildId) await LogService.detail(buildId, 'Stopping application process');
         await this.killProjectProcess(projectId, port);
       }
     } else {
       await this.ensurePortFree(port);
     }
 
-    if (buildId) await LogService.stream(buildId, '✅ Deployment stopped successfully!');
+    if (buildId) {
+      await LogService.success(buildId, 'Deployment stopped successfully');
+    }
     return { success: true };
   },
 
@@ -279,16 +324,22 @@ export const DeployService = {
     let workingDir: string;
 
     if (useStaticServer) {
-      if (buildId) await LogService.stream(buildId, 'Using static file server...');
+      if (buildId) {
+        await LogService.detail(buildId, 'Detected static site - using static file server');
+      }
       const serverScript = join(process.cwd(), 'src', 'static-server.ts');
       const distDir = join(cwd, appType === 'nextjs' ? 'out' : 'dist');
       startCmd = ['bun', 'run', serverScript, distDir, port.toString()];
       workingDir = process.cwd();
     } else {
       if (framework.requiresInstall) {
-        if (buildId) await LogService.stream(buildId, 'Installing dependencies...');
-        await this.ensureDependenciesInstalled(cwd);
-        if (buildId) await LogService.stream(buildId, 'Dependencies installed!');
+        if (buildId) {
+          await LogService.step(buildId, 'Installing production dependencies');
+        }
+        await this.ensureDependenciesInstalled(cwd, buildId);
+        if (buildId) {
+          await LogService.success(buildId, 'Dependencies installed');
+        }
       }
       startCmd = isBackendFramework(appType)
         ? getBackendStartCommand(cwd)
@@ -296,14 +347,12 @@ export const DeployService = {
       workingDir = cwd;
     }
 
+    if (buildId) {
+      await LogService.detail(buildId, `Starting server on port ${port}`);
+    }
+
     console.log(`[DeployService] Starting app with command: ${startCmd.join(' ')}`);
     console.log(`[DeployService] Working directory: ${workingDir}`);
-    console.log(`[DeployService] PORT env var will be set to: ${port}`);
-    console.log(
-      `[DeployService] Passing ${Object.keys(envVars).length} project env vars:`,
-      Object.keys(envVars),
-    );
-    if (buildId) await LogService.stream(buildId, `Starting application server...`);
 
     const appProc = Bun.spawn(startCmd, {
       cwd: workingDir,
@@ -319,7 +368,7 @@ export const DeployService = {
       },
     });
 
-    // Log app output for debugging
+    // Log app output for debugging (but don't stream to user - too verbose)
     const logAppOutput = async (stream: ReadableStream<Uint8Array> | null, label: string) => {
       if (!stream) return;
       const reader = stream.getReader();
@@ -329,7 +378,13 @@ export const DeployService = {
           if (done) break;
           const text = new TextDecoder().decode(value);
           console.log(`[App ${label}]`, text);
-          if (buildId) await LogService.stream(buildId, text);
+          // Only log errors to user to avoid noise
+          if (label === 'stderr' && buildId && text.trim()) {
+            // Log only significant errors, not normal startup messages
+            if (text.toLowerCase().includes('error') || text.toLowerCase().includes('fatal')) {
+              await LogService.warning(buildId, `App stderr: ${text.slice(0, 200)}`);
+            }
+          }
         }
       } catch {
         // Stream closed, that's fine
@@ -344,76 +399,113 @@ export const DeployService = {
     await Bun.write(pidFile, appProc.pid.toString());
     appProc.unref();
 
-    if (buildId)
-      await LogService.stream(buildId, `Application started, performing health check...`);
+    if (buildId) {
+      await LogService.step(buildId, 'Performing health check');
+      await LogService.progress(buildId, 'Waiting for application to become ready...');
+    }
 
     try {
-      await this.performHealthCheck(port);
+      await this.performHealthCheck(port, buildId);
       console.log(`[DeployService] Health check completed successfully for port ${port}`);
-      if (buildId) await LogService.stream(buildId, `Health check passed!`);
-    } catch (e) {
+      if (buildId) {
+        await LogService.success(buildId, 'Health check passed - application is responding');
+      }
+    } catch (e: any) {
       console.error(`[DeployService] Health check failed for port ${port}:`, e);
-      if (buildId) await LogService.stream(buildId, `❌ Health check failed: ${e}`);
+      if (buildId) {
+        await LogService.error(buildId, `Health check failed: ${e.message}`);
+      }
       throw e;
     }
   },
 
-  async ensureDependenciesInstalled(cwd: string) {
+  async ensureDependenciesInstalled(cwd: string, buildId?: string) {
     const nodeModulesPath = join(cwd, 'node_modules');
     const packageJsonPath = join(cwd, 'package.json');
 
     console.log(`[DeployService] ensureDependenciesInstalled called with cwd: ${cwd}`);
-    console.log(`[DeployService] Checking for package.json at: ${packageJsonPath}`);
-    console.log(`[DeployService] package.json exists: ${existsSync(packageJsonPath)}`);
 
     // Check if package.json exists
     if (!existsSync(packageJsonPath)) {
       console.log(`[DeployService] No package.json found, skipping install`);
+      if (buildId) {
+        await LogService.detail(buildId, 'No package.json found, skipping dependency install');
+      }
       return;
     }
 
-    // Always run install for fresh deployments
     console.log(`[DeployService] Running: bun install in ${cwd}`);
+    if (buildId) {
+      await LogService.detail(buildId, 'Running bun install...');
+    }
 
-    const installProc = Bun.spawn(['bun', 'install'], {
+    const installProc = Bun.spawn(['bun', 'install', '--production'], {
       cwd,
-      stdout: 'inherit',
-      stderr: 'inherit',
+      stdout: 'pipe',
+      stderr: 'pipe',
     });
+
+    // Capture and log install output
+    const captureOutput = async (stream: ReadableStream<Uint8Array> | null) => {
+      if (!stream) return '';
+      const reader = stream.getReader();
+      let output = '';
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          output += new TextDecoder().decode(value);
+        }
+      } catch (e) {
+        console.error(`[DeployService] Error reading install output:`, e);
+      }
+      return output;
+    };
+
+    const [stdout, stderr] = await Promise.all([
+      captureOutput(installProc.stdout),
+      captureOutput(installProc.stderr),
+    ]);
+
     await installProc.exited;
 
     console.log(`[DeployService] bun install exited with code: ${installProc.exitCode}`);
+    if (stdout) console.log(`[DeployService] bun install stdout: ${stdout}`);
+    if (stderr) console.log(`[DeployService] bun install stderr: ${stderr}`);
 
     if (installProc.exitCode !== 0) {
       console.error(`[DeployService] bun install failed with exit code ${installProc.exitCode}`);
+      if (buildId) {
+        await LogService.error(buildId, `Dependency installation failed`);
+      }
       throw new Error('Dependency install failed');
     }
 
-    // Verify node_modules was created
-    console.log(
-      `[DeployService] node_modules exists after install: ${existsSync(nodeModulesPath)}`,
-    );
     console.log(`[DeployService] Dependencies installed successfully`);
   },
 
-  async performHealthCheck(port: number) {
+  async performHealthCheck(port: number, buildId?: string) {
     console.log(`[DeployService] Waiting for health check on port ${port}...`);
 
-    const maxWaitMs = 10000; // total wait time
+    const maxWaitMs = 15000; // 15 seconds wait time
     const intervalMs = 500;
     const deadline = Date.now() + maxWaitMs;
+    let attempts = 0;
 
     while (Date.now() < deadline) {
+      attempts++;
       try {
         const res = await fetch(`http://localhost:${port}`);
         console.log(`[DeployService] Health check response: ${res.status}`);
         if (res.ok || res.status < 500) {
-          console.log(`[DeployService] Health check passed.`);
+          console.log(`[DeployService] Health check passed after ${attempts} attempts.`);
           return;
         }
       } catch {
-        // service not up yet - no need to log every retry
-        // service not up yet
+        // service not up yet - log every 5th attempt
+        if (attempts % 5 === 0 && buildId) {
+          await LogService.progress(buildId, `Still waiting... (attempt ${attempts})`);
+        }
       }
 
       await new Promise((r) => setTimeout(r, intervalMs));

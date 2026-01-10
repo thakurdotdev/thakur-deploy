@@ -15,6 +15,7 @@ interface BuildJob {
   root_directory: string;
   app_type: AppType;
   env_vars: Record<string, string>;
+  installation_id?: string;
 }
 
 export const Builder = {
@@ -48,7 +49,7 @@ export const Builder = {
 
       let token: string | undefined;
       // Resolve installation token if installation_id exists
-      if ((job as any).installation_id) {
+      if (job.installation_id) {
         try {
           await LogStreamer.stream(
             job.build_id,
@@ -56,7 +57,7 @@ export const Builder = {
             'Authenticating with GitHub App...\n',
             'info',
           );
-          token = await WorkerGitHubService.getInstallationToken((job as any).installation_id);
+          token = await WorkerGitHubService.getInstallationToken(job.installation_id);
         } catch (e: any) {
           await LogStreamer.stream(
             job.build_id,
